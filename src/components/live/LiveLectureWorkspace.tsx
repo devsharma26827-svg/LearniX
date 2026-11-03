@@ -39,7 +39,7 @@ export const LiveLectureWorkspace: React.FC = () => {
     if (transcriptEndRef.current) {
       transcriptEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [activeLecture?.transcript]);
+  }, [activeLecture?.transcript, liveSession.interimTranscript]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.75rem)] bg-[#F8FAF8] dark:bg-[#121816] text-[#17201D] dark:text-[#F1FAF7] overflow-hidden font-sans">
@@ -82,6 +82,22 @@ export const LiveLectureWorkspace: React.FC = () => {
           <span className="text-[10px] text-[#0F6B59] dark:text-[#23A98D] bg-[#E7F6F1] dark:bg-[#1E3730] px-2 py-0.5 rounded-full font-semibold hidden md:inline">
             {activeLecture?.subject || "Subject"}
           </span>
+
+          {liveSession.streamStatus === "live" && (
+            <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full font-medium border border-emerald-300 dark:border-emerald-800 hidden sm:inline">
+              ⚡ Gemini Live 16kHz
+            </span>
+          )}
+          {liveSession.streamStatus === "fallback" && (
+            <span className="text-[10px] bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full font-medium border border-amber-300 dark:border-amber-800 hidden sm:inline">
+              🛡️ Resilient Verbatim
+            </span>
+          )}
+          {liveSession.detectedLanguage && (
+            <span className="text-[10px] bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 px-2 py-0.5 rounded-full font-medium border border-sky-300 dark:border-sky-800 hidden md:inline">
+              🌐 {liveSession.detectedLanguage.toUpperCase()}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center space-x-3 shrink-0">
@@ -210,6 +226,22 @@ export const LiveLectureWorkspace: React.FC = () => {
                 </div>
               ))
             )}
+
+            {/* Live Interim Speech Bubble */}
+            {liveSession.interimTranscript && (
+              <div className="p-4 rounded-2xl border border-[#168A72]/40 bg-[#E7F6F1]/50 dark:bg-[#1E3730]/40 shadow-xs animate-pulse space-y-1">
+                <div className="flex items-center gap-2 text-xs text-[#0F6B59] dark:text-[#23A98D]">
+                  <Mic className="w-3.5 h-3.5 animate-bounce text-[#168A72]" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    Live Speech Capture...
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm leading-relaxed text-[#17201D] dark:text-[#F1FAF7] italic">
+                  {liveSession.interimTranscript}
+                </p>
+              </div>
+            )}
+
             <div ref={transcriptEndRef} />
           </div>
         </div>

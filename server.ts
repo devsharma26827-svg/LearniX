@@ -9,6 +9,7 @@ import { exec } from "child_process";
 import apiRoutes from "./server/routes/api";
 import { db } from "./server/db";
 import { storageProvider } from "./server/services/storageProvider";
+import { liveTranscriptionService } from "./server/services/liveTranscriptionService";
 
 /**
  * Robust Client Dist Path Resolver
@@ -230,6 +231,17 @@ async function startServer() {
     if (shouldAutoOpen) {
       console.log(`[Auto-Launcher] Opening browser at ${localUrl} ...\n`);
       openBrowser(localUrl);
+    }
+  });
+
+  server.on("upgrade", (request, socket, head) => {
+    try {
+      const pathname = new URL(request.url || "", `http://${request.headers.host || "localhost"}`).pathname;
+      if (pathname === "/api/live-stream" || pathname === "/ws/live-stream") {
+        liveTranscriptionService.handleUpgrade(request, socket, head);
+      }
+    } catch (e) {
+      console.error("[WebSocket Upgrade Error]", e);
     }
   });
 

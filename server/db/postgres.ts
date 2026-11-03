@@ -1625,6 +1625,66 @@ export class PostgresDatabase implements IDatabase {
       );
     }
 
+    // 6b. Topics (9 per subject)
+    const topics = [
+      // DSA
+      { id: "top-dsa-1", subject_id: "subj-dsa", name: "Stack Basics & LIFO Architecture", description: "LIFO protocol, stack pointer, and memory layout.", order_index: 1 },
+      { id: "top-dsa-2", subject_id: "subj-dsa", name: "Push & Pop Pointer Operations & Boundary Guards", description: "Constant-time O(1) insertion, retrieval, and boundary guards.", order_index: 2 },
+      { id: "top-dsa-3", subject_id: "subj-dsa", name: "Queue Mechanics & Circular Buffer Implementations", description: "Dual-pointer enqueue and dequeue implementations, circular array buffers.", order_index: 3 },
+      { id: "top-dsa-4", subject_id: "subj-dsa", name: "Binary Search Trees & Recursive Traversals", description: "In-order, pre-order, and post-order tree visitations, BST search property.", order_index: 4 },
+      { id: "top-dsa-5", subject_id: "subj-dsa", name: "Hash Tables, Open Addressing & Collision Resolution", description: "Hash functions, separate chaining, linear probing, and load factor thresholding.", order_index: 5 },
+      { id: "top-dsa-6", subject_id: "subj-dsa", name: "Graph Representations: Adjacency Matrix & Lists", description: "Directed vs undirected graphs, edge weights, space-time tradeoffs.", order_index: 6 },
+      { id: "top-dsa-7", subject_id: "subj-dsa", name: "Graph Traversals: Breadth-First & Depth-First Search", description: "Queue-driven BFS, recursion/stack DFS, cycle detection and connectivity.", order_index: 7 },
+      { id: "top-dsa-8", subject_id: "subj-dsa", name: "Dynamic Programming: Memoization & Tabulation", description: "Optimal substructure, overlapping subproblems, 0/1 Knapsack, LCS.", order_index: 8 },
+      { id: "top-dsa-9", subject_id: "subj-dsa", name: "Heaps, Priority Queues & Heap Sort", description: "Max/min-heap invariant, swim/sink heapify operations, O(N log N) sorting.", order_index: 9 },
+
+      // OS
+      { id: "top-os-1", subject_id: "subj-os", name: "Virtual Memory Abstraction & Memory Hierarchies", description: "Contiguous virtual address space mapped dynamically onto physical RAM.", order_index: 1 },
+      { id: "top-os-2", subject_id: "subj-os", name: "Paging, Page Tables & Physical Frame Allocation", description: "Virtual page numbers, frame tables, multilevel page tables, offset preservation.", order_index: 2 },
+      { id: "top-os-3", subject_id: "subj-os", name: "Page Fault Traps, Demand Paging & Disk Swapping", description: "Hardware trap triggers, swap space I/O, page eviction policies (FIFO, LRU).", order_index: 3 },
+      { id: "top-os-4", subject_id: "subj-os", name: "TLB Hardware Caching & Translation Lookaside Architecture", description: "Hardware associative cache accelerating page translation, hit rates, flushes.", order_index: 4 },
+      { id: "top-os-5", subject_id: "subj-os", name: "Process Lifecycle, PCB & Context Switching", description: "Process states, Process Control Block registers, kernel mode switches.", order_index: 5 },
+      { id: "top-os-6", subject_id: "subj-os", name: "CPU Scheduling Algorithms: FCFS, Round Robin & Multi-Level Feedback", description: "Preemptive vs non-preemptive scheduling, turnaround time, quantum sizing.", order_index: 6 },
+      { id: "top-os-7", subject_id: "subj-os", name: "Inter-Process Communication & Synchronization Primitives", description: "Shared memory, message queues, mutexes, semaphores, race conditions.", order_index: 7 },
+      { id: "top-os-8", subject_id: "subj-os", name: "Deadlock Prevention, Detection & Bankers Algorithm", description: "Mutual exclusion, hold and wait, no preemption, circular wait, safe states.", order_index: 8 },
+      { id: "top-os-9", subject_id: "subj-os", name: "Virtual File Systems, Inodes & Disk Scheduling", description: "File control blocks, inode allocation, directory structures, SCAN/LOOK algorithms.", order_index: 9 },
+
+      // Networks
+      { id: "top-net-1", subject_id: "subj-net", name: "OSI & TCP/IP Layered Reference Models", description: "Layer boundaries, encapsulation, protocols, and data link frame abstraction.", order_index: 1 },
+      { id: "top-net-2", subject_id: "subj-net", name: "TCP 3-Way Handshake State Machine & ISN Negotiation", description: "SYN, SYN-ACK, ACK connection setup, Initial Sequence Numbers, teardown.", order_index: 2 },
+      { id: "top-net-3", subject_id: "subj-net", name: "Sliding Window Flow Control & Buffer Management", description: "Advertised receiver window (rwnd) preventing receiver buffer overflow.", order_index: 3 },
+      { id: "top-net-4", subject_id: "subj-net", name: "TCP Congestion Control: AIMD, Slow Start & Fast Recovery", description: "Congestion window (cwnd), ssthresh, Reno vs Cubic, duplicate ACKs.", order_index: 4 },
+      { id: "top-net-5", subject_id: "subj-net", name: "IP Addressing, CIDR Subnetting & Supernetting", description: "IPv4/IPv6 headers, subnet masks, slash notation, network vs host IDs.", order_index: 5 },
+      { id: "top-net-6", subject_id: "subj-net", name: "Routing Protocols: Distance Vector vs Link State", description: "Bellman-Ford vs Dijkstra, RIP, OSPF link state advertisements, BGP peering.", order_index: 6 },
+      { id: "top-net-7", subject_id: "subj-net", name: "Domain Name System (DNS) & Hierarchy Resolution", description: "Root nameservers, TLD, authoritative DNS, caching, recursive lookups.", order_index: 7 },
+      { id: "top-net-8", subject_id: "subj-net", name: "Transport Layer Security (TLS/HTTPS) & Cryptographic Handshakes", description: "Cipher suites, asymmetric public key exchange, symmetric session encryption.", order_index: 8 },
+      { id: "top-net-9", subject_id: "subj-net", name: "Application Layer Protocols: HTTP/1.1, HTTP/2, WebSocket & QUIC", description: "Multiplexing, header compression, persistent bidirectional sockets, UDP-based QUIC.", order_index: 9 },
+
+      // AI
+      { id: "top-ai-1", subject_id: "subj-ai", name: "Heuristic Search, State Space & A* Pathfinding", description: "Admissible and consistent heuristics, open/closed lists, graph exploration.", order_index: 1 },
+      { id: "top-ai-2", subject_id: "subj-ai", name: "Supervised Learning: Linear & Logistic Regression", description: "Hypothesis functions, mean squared error, cross-entropy, decision boundaries.", order_index: 2 },
+      { id: "top-ai-3", subject_id: "subj-ai", name: "Deep Neural Networks, Activation Functions & Backpropagation", description: "Multilayer perceptrons, ReLU, Sigmoid, chain rule gradient propagation.", order_index: 3 },
+      { id: "top-ai-4", subject_id: "subj-ai", name: "Loss Functions, Optimization Algorithms & Stochastic Gradient Descent", description: "Mini-batch SGD, momentum, RMSprop, Adam optimizer, learning rate schedules.", order_index: 4 },
+      { id: "top-ai-5", subject_id: "subj-ai", name: "Convolutional Neural Networks (CNNs) & Computer Vision", description: "Kernel filters, feature maps, stride, padding, pooling layers, ResNet skip connections.", order_index: 5 },
+      { id: "top-ai-6", subject_id: "subj-ai", name: "Recurrent Neural Networks, LSTMs & Sequence Modeling", description: "Hidden state feedback, vanishing gradients, forget gates, cell state highway.", order_index: 6 },
+      { id: "top-ai-7", subject_id: "subj-ai", name: "Self-Attention Mechanics, Encoders & Transformer Architectures", description: "Query-Key-Value dot-product scaling, multi-head attention, positional encoding.", order_index: 7 },
+      { id: "top-ai-8", subject_id: "subj-ai", name: "Large Language Models, Context Windows & Prompt Engineering", description: "Causal masking, auto-regressive decoding, temperature, Top-P, token embeddings.", order_index: 8 },
+      { id: "top-ai-9", subject_id: "subj-ai", name: "Reinforcement Learning: Markov Decision Processes & Q-Learning", description: "Agent-environment loop, Bellman optimality equation, exploration vs exploitation.", order_index: 9 },
+    ];
+    for (const t of topics) {
+      await this.pool.query(
+        `INSERT INTO topics (id, subject_id, name, description, order_index, is_active, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           description = EXCLUDED.description,
+           order_index = EXCLUDED.order_index,
+           is_active = EXCLUDED.is_active,
+           updated_at = CURRENT_TIMESTAMP`,
+        [t.id, t.subject_id, t.name, t.description, t.order_index]
+      );
+    }
+
     // 7. Teacher-Subjects
     const assignments = [
       { teacher_id: "teacher-jenkins", subject_id: "subj-dsa" },

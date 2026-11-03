@@ -62,6 +62,9 @@ export const MODELS = {
   get TRANSCRIBE() {
     return getAiConfig().models.transcribe;
   },
+  get LIVE_TRANSCRIBE() {
+    return getAiConfig().models.liveTranscribe;
+  },
   get EMBEDDING() {
     return getAiConfig().models.embedding;
   },

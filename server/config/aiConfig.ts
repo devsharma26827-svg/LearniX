@@ -22,6 +22,7 @@ export interface AiConfig {
     text: string;
     fallbackText: string;
     transcribe: string;
+    liveTranscribe: string;
     embedding: string;
   };
   transcription: {
@@ -96,6 +97,7 @@ export function initializeAiConfig(): AiConfig {
       text: process.env.GEMINI_TEXT_MODEL || "gemini-3.7-flash",
       fallbackText: process.env.GEMINI_FALLBACK_TEXT_MODEL || "gemini-2.5-flash",
       transcribe: process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-3.5-transcribe",
+      liveTranscribe: process.env.GEMINI_LIVE_TRANSCRIBE_MODEL || "gemini-3.5-transcribe-live",
       embedding: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2-preview",
     },
     transcription: {

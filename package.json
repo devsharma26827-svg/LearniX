@@ -21,7 +21,8 @@
     "test:wizard": "tsx scripts/test_live_wizard_suite.ts",
     "test:fixes": "tsx scripts/test_final_bug_fixes.ts",
     "test:render": "tsx scripts/test_render_production_serving.ts",
-    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts && tsx scripts/test_quota_and_job_queue.ts && tsx scripts/test_live_wizard_suite.ts && tsx scripts/test_final_bug_fixes.ts && tsx scripts/test_render_production_serving.ts"
+    "test:live": "tsx scripts/test_live_transcription_pipeline.ts",
+    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts && tsx scripts/test_quota_and_job_queue.ts && tsx scripts/test_live_wizard_suite.ts && tsx scripts/test_final_bug_fixes.ts && tsx scripts/test_render_production_serving.ts && tsx scripts/test_live_transcription_pipeline.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -45,7 +46,8 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-router-dom": "^7.18.4",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
@@ -55,6 +57,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.23.1",
+    "@types/ws": "^8.5.14",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",

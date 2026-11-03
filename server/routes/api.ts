@@ -635,6 +635,33 @@ router.get("/academic/topics", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/academic/topics", async (req: Request, res: Response) => {
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const { subjectId, topicName, name, description, sortOrder, orderIndex } = req.body || {};
+  if (!subjectId || (!topicName && !name)) {
+    return res.status(400).json({ error: "subjectId and topicName/name are required." });
+  }
+
+  try {
+    const finalName = topicName || name;
+    const finalOrder = orderIndex ?? sortOrder ?? 0;
+    const created = await db.createTopic({
+      subjectId,
+      name: finalName,
+      topicName: finalName,
+      description: description || "",
+      orderIndex: finalOrder,
+      sortOrder: finalOrder,
+      isActive: true,
+    });
+    res.status(201).json(created);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to create topic." });
+  }
+});
+
 router.post("/academic/enroll", async (req: Request, res: Response) => {
   const user = requireAuth(req, res);
   if (!user) return;

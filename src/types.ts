@@ -37,6 +37,10 @@ export type StudentProfile = User;
 
 export interface TranscriptSegment {
   id: string;
+  userId?: string;
+  lectureId?: string;
+  recordingSessionId?: string;
+  sequenceNumber?: number;
   startTime: number; // in seconds
   endTime: number; // in seconds
   text: string;
@@ -48,7 +52,10 @@ export interface TranscriptSegment {
   isDefinition?: boolean;
   isExample?: boolean;
   isKeyPoint?: boolean;
+  isFinal?: boolean;
   confidence?: number;
+  transcriptionProvider?: string;
+  createdAt?: string;
 }
 
 export interface Chapter {
@@ -82,6 +89,9 @@ export interface SmartNoteSection {
     start: number;
     end: number;
   }[];
+  sourceSegmentIds?: string[];
+  language?: string;
+  confidence?: "supported" | "partial" | "inferred";
 }
 
 export type SmartNote = SmartNoteSection;
@@ -100,6 +110,8 @@ export interface QuizQuestion {
   sourceTimestamp: number;
   difficulty: QuestionDifficulty;
   topic: string;
+  sourceSegmentIds?: string[];
+  language?: string;
 }
 
 export interface QuestionResult {
@@ -141,6 +153,9 @@ export interface Quiz {
   questions: QuizQuestion[];
   totalQuestions: number;
   createdAt: string;
+  status?: "ready" | "insufficient_content";
+  message?: string;
+  language?: string;
 }
 
 export interface MiniPracticeQuestion {

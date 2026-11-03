@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from "r
 import { useNavigate, useLocation } from "react-router-dom";
 import { Lecture, TranscriptSegment, RagResponse, QuizAttempt, WeakTopic } from "../types";
 import { useAuth } from "./AuthContext";
+import { AudioPcmProcessor } from "../utils/audioPcmProcessor";
 
 export type ViewType =
   | "landing"
@@ -37,6 +38,9 @@ interface LiveSessionState {
   quotaExhausted: boolean;
   pendingChunksCount: number;
   quotaMessage: string | null;
+  interimTranscript?: string;
+  streamStatus?: "connecting" | "live" | "fallback" | "finalizing" | "ready";
+  detectedLanguage?: string;
 }
 
 interface LectureContextType {
@@ -170,6 +174,9 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const isRecordingActiveRef = useRef<boolean>(false);
   const currentLectureIdRef = useRef<string | null>(null);
   const liveDurationRef = useRef<number>(0);
+  const wsRef = useRef<WebSocket | null>(null);
+  const pcmProcessorRef = useRef<AudioPcmProcessor | null>(null);
+  const finalizeResolverRef = useRef<(() => void) | null>(null);
 
   const getAuthHeaders = (): Record<string, string> => {
     const token = localStorage.getItem("learnix_token") || "";
@@ -362,14 +369,102 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         body: JSON.stringify({ status: "recording", duration: 0 }),
       });
 
-      // 4. Setup Live MediaRecorder with robust chunking (Single authoritative pipeline)
+      // 4. Setup Real-Time WebSocket Streaming & PCM Processor
+      try {
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const token = localStorage.getItem("learnix_token") || "";
+        const wsUrl = `${wsProto}//${window.location.host}/api/live-stream?token=${encodeURIComponent(token)}&lectureId=${encodeURIComponent(lecture.id)}&language=${encodeURIComponent(metadata?.language || "auto")}`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setLiveSession((prev) => ({ ...prev, streamStatus: "connecting" }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "status") {
+              setLiveSession((prev) => ({
+                ...prev,
+                streamStatus: data.status === "live_connected" ? "live" : "fallback",
+              }));
+            } else if (data.type === "interim_transcript") {
+              if (data.text) {
+                setLiveSession((prev) => ({
+                  ...prev,
+                  interimTranscript: data.text,
+                }));
+              }
+            } else if (data.type === "final_transcript" && data.segment) {
+              const seg: TranscriptSegment = data.segment;
+              setLiveSession((prev) => ({
+                ...prev,
+                interimTranscript: "",
+                detectedLanguage: seg.language || prev.detectedLanguage,
+              }));
+              setActiveLecture((prev) => {
+                if (!prev || prev.id !== lecture.id) return prev;
+                const exists = prev.transcript.some(
+                  (s) => s.id === seg.id || s.text.trim().toLowerCase() === seg.text.trim().toLowerCase()
+                );
+                if (exists) return prev;
+                return {
+                  ...prev,
+                  duration: Math.max(prev.duration || 0, seg.endTime),
+                  transcript: [...prev.transcript, seg],
+                };
+              });
+
+              if (seg.isDefinition) {
+                setLiveSession((prev) => ({
+                  ...prev,
+                  detectedDefinitions: Array.from(new Set([...prev.detectedDefinitions, seg.text])).slice(0, 5),
+                }));
+              }
+              if (seg.isImportant || seg.isKeyPoint) {
+                setLiveSession((prev) => ({
+                  ...prev,
+                  detectedConcepts: Array.from(new Set([...prev.detectedConcepts, seg.text])).slice(0, 5),
+                }));
+              }
+              if (seg.isExample) {
+                setLiveSession((prev) => ({
+                  ...prev,
+                  detectedExamples: Array.from(new Set([...prev.detectedExamples, seg.text])).slice(0, 5),
+                }));
+              }
+            } else if (data.type === "session_finalized") {
+              if (finalizeResolverRef.current) {
+                finalizeResolverRef.current();
+                finalizeResolverRef.current = null;
+              }
+            }
+          } catch (e) {
+            console.warn("[WS] Error parsing message:", e);
+          }
+        };
+
+        // Start PCM Audio streaming
+        const pcmProcessor = new AudioPcmProcessor(stream);
+        pcmProcessorRef.current = pcmProcessor;
+        pcmProcessor.start((pcmChunk: Uint8Array) => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(pcmChunk);
+          }
+        });
+      } catch (wsErr) {
+        console.warn("[WS] Live streaming setup error, falling back to HTTP chunking:", wsErr);
+      }
+
+      // 5. Setup Live MediaRecorder as parallel durable backup
       try {
         chunkSequenceRef.current = 0;
         isRecordingActiveRef.current = true;
         currentLectureIdRef.current = lecture.id;
         liveDurationRef.current = 0;
 
-        const CHUNK_INTERVAL_MS = 45000; // 45-second target chunks to reduce API quota consumption
+        const CHUNK_INTERVAL_MS = 15000; // 15-second chunks for backup
         let chunkStartTime = 0;
 
         const sendAudioChunk = (blob: Blob, seq: number, timestamp: number) => {
@@ -411,29 +506,19 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 if (data.newSegments && data.newSegments.length > 0) {
                   setActiveLecture((prev) => {
                     if (!prev || prev.id !== lectureId) return prev;
+                    const newSegs = data.newSegments.filter(
+                      (ns: any) => !prev.transcript.some((s) => s.id === ns.id || s.text.trim().toLowerCase() === ns.text.trim().toLowerCase())
+                    );
+                    if (newSegs.length === 0) return prev;
                     return {
                       ...prev,
                       duration: data.currentDuration || prev.duration,
-                      transcript: [...prev.transcript, ...data.newSegments],
+                      transcript: [...prev.transcript, ...newSegs],
                     };
                   });
-
-                  // Update live AI panel signals dynamically from new segments
-                  const defs = data.newSegments.filter((s: any) => s.isDefinition).map((s: any) => s.text);
-                  const imps = data.newSegments.filter((s: any) => s.isImportant || s.isKeyPoint).map((s: any) => s.text);
-                  const exs = data.newSegments.filter((s: any) => s.isExample).map((s: any) => s.text);
-                  const latestTopic = data.newSegments[data.newSegments.length - 1]?.topic;
-
-                  setLiveSession((prev) => ({
-                    ...prev,
-                    currentTopic: latestTopic || prev.currentTopic,
-                    detectedConcepts: Array.from(new Set([...imps, ...prev.detectedConcepts])).slice(0, 5),
-                    detectedDefinitions: Array.from(new Set([...defs, ...prev.detectedDefinitions])).slice(0, 5),
-                    detectedExamples: Array.from(new Set([...exs, ...prev.detectedExamples])).slice(0, 5),
-                  }));
                 }
               } catch (err) {
-                console.warn("[TRANSCRIPTION] Failed to upload chunk to server:", err);
+                console.warn("[TRANSCRIPTION] Backup chunk error:", err);
               }
             }
           };
@@ -467,7 +552,6 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
           mediaRecorderRef.current = rec;
         }
 
-        // Periodically cycle the recorder to ensure every chunk has a valid standalone header
         if (chunkIntervalRef.current) clearInterval(chunkIntervalRef.current);
         chunkIntervalRef.current = setInterval(() => {
           if (!isRecordingActiveRef.current) return;
@@ -660,6 +744,42 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         recognitionRef.current.stop();
       } catch (e) {}
     }
+
+    // 2. Stop PCM processor
+    if (pcmProcessorRef.current) {
+      try {
+        pcmProcessorRef.current.stop();
+      } catch (e) {}
+      pcmProcessorRef.current = null;
+    }
+
+    // 3. Gracefully end WebSocket session and await final transcript flush
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setLiveSession((prev) => ({ ...prev, streamStatus: "finalizing" }));
+      try {
+        await new Promise<void>((resolve) => {
+          finalizeResolverRef.current = resolve;
+          try {
+            wsRef.current?.send(JSON.stringify({ type: "end_session" }));
+          } catch {}
+          // Safety timeout after 4000ms so UI never stalls
+          setTimeout(() => {
+            if (finalizeResolverRef.current) {
+              finalizeResolverRef.current();
+              finalizeResolverRef.current = null;
+            }
+          }, 4000);
+        });
+      } catch (err) {
+        console.warn("[WS] Finalize wait error:", err);
+      }
+      try {
+        wsRef.current.close();
+      } catch {}
+      wsRef.current = null;
+    }
+
+    // 4. Stop MediaRecorder
     if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state === "recording") {
@@ -670,8 +790,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         }
       } catch (e) {}
     }
-    // Give final audio chunk time to serialize and send to server
-    await new Promise((r) => setTimeout(r, 400));
+
     if (liveSession.mediaStream) {
       liveSession.mediaStream.getTracks().forEach((track) => track.stop());
     }
@@ -688,6 +807,8 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isPaused: false,
       mediaStream: null,
       audioAnalyser: null,
+      interimTranscript: "",
+      streamStatus: "ready",
     }));
 
     if (activeLecture) {
