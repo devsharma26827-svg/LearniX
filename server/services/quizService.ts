@@ -79,9 +79,12 @@ Output valid JSON matching this schema:
       priority: TaskPriority.NORMAL,
       userId: lecture.createdBy,
       lectureId: lecture.id,
+      idempotencyKey: `quiz-${lecture.id}-${chapterId || "all"}-${numQuestions}-${difficulty}`,
       promptOrInput: `${notesText}\n---\n${transcriptSnippet}\nnum:${numQuestions}:diff:${difficulty}:chap:${targetChapterTitle}`,
       preferredModel: MODELS.TEXT,
-      fallbackModels: process.env.GEMINI_FALLBACK_TEXT_MODEL ? [process.env.GEMINI_FALLBACK_TEXT_MODEL] : [],
+      fallbackModels: [MODELS.FALLBACK_TEXT, "gemini-2.0-flash", "gemini-1.5-flash"].filter(
+        (m) => Boolean(m) && m !== MODELS.TEXT
+      ),
       executeAi: async (modelName: string) => {
         const client = getGeminiClient();
         if (!client) throw new Error("Gemini client uninitialized");

@@ -1,0 +1,85 @@
+-- 007_academic_hierarchy_and_enrollments.sql
+CREATE TABLE IF NOT EXISTS institutions (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  code VARCHAR(50) UNIQUE NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS academic_terms (
+  id VARCHAR(255) PRIMARY KEY,
+  institution_id VARCHAR(255) NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  code VARCHAR(50) NOT NULL,
+  start_date VARCHAR(50),
+  end_date VARCHAR(50),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (institution_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS departments (
+  id VARCHAR(255) PRIMARY KEY,
+  institution_id VARCHAR(255) NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  code VARCHAR(50) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (institution_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS academic_programs (
+  id VARCHAR(255) PRIMARY KEY,
+  institution_id VARCHAR(255) NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  department_id VARCHAR(255) NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  code VARCHAR(50) NOT NULL,
+  degree_type VARCHAR(50) NOT NULL DEFAULT 'bachelors',
+  total_semesters INTEGER NOT NULL DEFAULT 8,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (institution_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS student_enrollments (
+  id VARCHAR(255) PRIMARY KEY,
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  institution_id VARCHAR(255) NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  term_id VARCHAR(255) NOT NULL REFERENCES academic_terms(id) ON DELETE CASCADE,
+  program_id VARCHAR(255) NOT NULL REFERENCES academic_programs(id) ON DELETE CASCADE,
+  semester VARCHAR(50) NOT NULL DEFAULT 'Semester 1',
+  roll_number VARCHAR(100),
+  status VARCHAR(50) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (student_id, term_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_student ON student_enrollments(student_id);
+
+CREATE TABLE IF NOT EXISTS student_subjects (
+  student_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subject_id VARCHAR(255) NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+  enrollment_id VARCHAR(255) REFERENCES student_enrollments(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (student_id, subject_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_subjects_student ON student_subjects(student_id);
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id VARCHAR(255) PRIMARY KEY,
+  admin_id VARCHAR(255) REFERENCES users(id) ON DELETE SET NULL,
+  action VARCHAR(255) NOT NULL,
+  entity_type VARCHAR(100) NOT NULL,
+  entity_id VARCHAR(255),
+  details_json JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created_at ON admin_audit_logs(created_at);

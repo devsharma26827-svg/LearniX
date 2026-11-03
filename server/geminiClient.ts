@@ -6,7 +6,7 @@ let isMockSet = false;
 
 /**
  * Resolves the Gemini API key via the centralized AiConfig module.
- * Prioritizes GEMINI_API_KEY, falls back to GOOGLE_API_KEY with one startup warning.
+ * Prioritizes canonical GEMINI_API_KEY, falls back to GOOGLE_API_KEY with one startup warning.
  */
 export function resolveGeminiApiKey(): string | null {
   const config = getAiConfig();
@@ -56,6 +56,9 @@ export const MODELS = {
   get TEXT() {
     return getAiConfig().models.text;
   },
+  get FALLBACK_TEXT() {
+    return getAiConfig().models.fallbackText;
+  },
   get TRANSCRIBE() {
     return getAiConfig().models.transcribe;
   },
@@ -63,4 +66,3 @@ export const MODELS = {
     return getAiConfig().models.embedding;
   },
 };
-

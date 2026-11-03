@@ -3,7 +3,20 @@ import path from "path";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import BetterSqlite3, { type Database as BetterSqlite3Database, type Statement } from "better-sqlite3";
-import { Lecture, User, Teacher, Subject, Topic } from "../src/types";
+import {
+  Lecture,
+  User,
+  Teacher,
+  Subject,
+  Topic,
+  Institution,
+  AcademicTerm,
+  Department,
+  AcademicProgram,
+  StudentEnrollment,
+  StudentAcademicContext,
+} from "../src/types";
+import { IDatabase, DatabaseHealth, UserSession, AdminAuditLog } from "./db/types";
 import { SAMPLE_LECTURES, SAMPLE_USERS } from "./sampleData";
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), ".data");
@@ -99,7 +112,7 @@ export function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export class Database {
+export class Database implements IDatabase {
   private sqlite: BetterSqlite3Database;
   private dbPath: string;
   private usersFile: string;
@@ -120,11 +133,40 @@ export class Database {
   private stmtGetSessionByHash!: Statement;
   private stmtDeleteSessionByHash!: Statement;
   private stmtDeleteSessionsByUser!: Statement;
+  private stmtUpdateSessionActivity!: Statement;
+  private stmtRevokeSessionByHash!: Statement;
+  private stmtRevokeSessionsByUser!: Statement;
 
   // Prepared statements for Password Resets
   private stmtInsertPasswordReset!: Statement;
   private stmtGetPasswordResetByHash!: Statement;
   private stmtMarkPasswordResetUsed!: Statement;
+
+  // Prepared statements for Master Data: Institutions, Terms, Departments, Programs
+  private stmtGetActiveInstitutions!: Statement;
+  private stmtGetAllInstitutions!: Statement;
+  private stmtGetInstitutionById!: Statement;
+  private stmtInsertInstitution!: Statement;
+
+  private stmtGetActiveAcademicTerms!: Statement;
+  private stmtGetAllAcademicTerms!: Statement;
+  private stmtInsertAcademicTerm!: Statement;
+
+  private stmtGetActiveDepartments!: Statement;
+  private stmtGetAllDepartments!: Statement;
+  private stmtInsertDepartment!: Statement;
+
+  private stmtGetActiveAcademicPrograms!: Statement;
+  private stmtGetActiveAcademicProgramsByDept!: Statement;
+  private stmtInsertAcademicProgram!: Statement;
+
+  private stmtGetStudentEnrollment!: Statement;
+  private stmtUpsertStudentEnrollment!: Statement;
+  private stmtInsertStudentSubject!: Statement;
+  private stmtGetStudentSubjects!: Statement;
+
+  private stmtInsertAdminAuditLog!: Statement;
+  private stmtGetAdminAuditLogs!: Statement;
 
   // Prepared statements for Master Data
   private stmtGetActiveTeachers!: Statement;
@@ -209,8 +251,8 @@ export class Database {
     this.runMigrations();
     this.prepareStatements();
     this.recoverInterruptedJobs();
-    this.seedMasterDataIfEmpty();
     this.seedMissingSamples();
+    this.seedMasterDataIfEmpty();
     this.migrateLegacyUsers();
   }
 
@@ -426,6 +468,103 @@ export class Database {
           CREATE INDEX IF NOT EXISTS idx_transcription_jobs_pending ON transcription_jobs(status, next_retry_at);
         `);
       });
+
+      // Migration 7: Academic Hierarchy, Enrollments & Audit Logs
+      this.applyMigration("007_academic_hierarchy_and_enrollments", () => {
+        // Upgrade sessions table if columns missing
+        const sessionCols = (this.sqlite.pragma("table_info(sessions)") as any[]).map((c) => c.name);
+        if (!sessionCols.includes("last_activity_at")) {
+          this.sqlite.exec("ALTER TABLE sessions ADD COLUMN last_activity_at TEXT");
+        }
+        if (!sessionCols.includes("revoked_at")) {
+          this.sqlite.exec("ALTER TABLE sessions ADD COLUMN revoked_at TEXT");
+        }
+
+        this.sqlite.exec(`
+          CREATE TABLE IF NOT EXISTS institutions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            code TEXT UNIQUE NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS academic_terms (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            code TEXT NOT NULL,
+            start_date TEXT,
+            end_date TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(institution_id, code)
+          );
+
+          CREATE TABLE IF NOT EXISTS departments (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            code TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(institution_id, code)
+          );
+
+          CREATE TABLE IF NOT EXISTS academic_programs (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+            department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            code TEXT NOT NULL,
+            degree_type TEXT NOT NULL DEFAULT 'bachelors',
+            total_semesters INTEGER NOT NULL DEFAULT 8,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(institution_id, code)
+          );
+
+          CREATE TABLE IF NOT EXISTS student_enrollments (
+            id TEXT PRIMARY KEY,
+            student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            institution_id TEXT NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+            term_id TEXT NOT NULL REFERENCES academic_terms(id) ON DELETE CASCADE,
+            program_id TEXT NOT NULL REFERENCES academic_programs(id) ON DELETE CASCADE,
+            semester TEXT NOT NULL DEFAULT 'Semester 1',
+            roll_number TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(student_id, term_id)
+          );
+
+          CREATE TABLE IF NOT EXISTS student_subjects (
+            student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            enrollment_id TEXT REFERENCES student_enrollments(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(student_id, subject_id)
+          );
+
+          CREATE TABLE IF NOT EXISTS admin_audit_logs (
+            id TEXT PRIMARY KEY,
+            admin_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT,
+            details_json TEXT,
+            created_at TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_student_enrollments_student ON student_enrollments(student_id);
+          CREATE INDEX IF NOT EXISTS idx_student_subjects_student ON student_subjects(student_id);
+          CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created ON admin_audit_logs(created_at);
+        `);
+      });
     } catch (err) {
       console.error("[Database Error] Migration failure:", err);
       throw err;
@@ -476,12 +615,15 @@ export class Database {
 
       // Sessions
       this.stmtInsertSession = this.sqlite.prepare(`
-        INSERT INTO sessions (id, token_hash, user_id, expires_at, created_at, user_agent, ip_address)
-        VALUES (@id, @token_hash, @user_id, @expires_at, @created_at, @user_agent, @ip_address)
+        INSERT INTO sessions (id, token_hash, user_id, expires_at, created_at, last_activity_at, revoked_at, user_agent, ip_address)
+        VALUES (@id, @token_hash, @user_id, @expires_at, @created_at, @last_activity_at, @revoked_at, @user_agent, @ip_address)
       `);
-      this.stmtGetSessionByHash = this.sqlite.prepare("SELECT * FROM sessions WHERE token_hash = ? AND expires_at > datetime('now')");
+      this.stmtGetSessionByHash = this.sqlite.prepare("SELECT * FROM sessions WHERE token_hash = ? AND (revoked_at IS NULL) AND expires_at > datetime('now')");
       this.stmtDeleteSessionByHash = this.sqlite.prepare("DELETE FROM sessions WHERE token_hash = ?");
       this.stmtDeleteSessionsByUser = this.sqlite.prepare("DELETE FROM sessions WHERE user_id = ?");
+      this.stmtUpdateSessionActivity = this.sqlite.prepare("UPDATE sessions SET last_activity_at = ? WHERE id = ?");
+      this.stmtRevokeSessionByHash = this.sqlite.prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ?");
+      this.stmtRevokeSessionsByUser = this.sqlite.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL");
 
       // Password resets
       this.stmtInsertPasswordReset = this.sqlite.prepare(`
@@ -644,6 +786,74 @@ export class Database {
       this.stmtDeleteLectureJobs = this.sqlite.prepare(
         "DELETE FROM transcription_jobs WHERE lecture_id = ?"
       );
+
+      // Academic Hierarchy Statements
+      this.stmtGetActiveInstitutions = this.sqlite.prepare("SELECT * FROM institutions WHERE is_active = 1 ORDER BY name ASC");
+      this.stmtGetAllInstitutions = this.sqlite.prepare("SELECT * FROM institutions ORDER BY name ASC");
+      this.stmtGetInstitutionById = this.sqlite.prepare("SELECT * FROM institutions WHERE id = ?");
+      this.stmtInsertInstitution = this.sqlite.prepare(`
+        INSERT INTO institutions (id, name, code, is_active, created_at, updated_at)
+        VALUES (@id, @name, @code, @is_active, @created_at, @updated_at)
+      `);
+
+      this.stmtGetActiveAcademicTerms = this.sqlite.prepare("SELECT * FROM academic_terms WHERE institution_id = ? AND is_active = 1 ORDER BY created_at DESC");
+      this.stmtGetAllAcademicTerms = this.sqlite.prepare("SELECT * FROM academic_terms WHERE institution_id = ? ORDER BY created_at DESC");
+      this.stmtInsertAcademicTerm = this.sqlite.prepare(`
+        INSERT INTO academic_terms (id, institution_id, name, code, start_date, end_date, is_active, created_at, updated_at)
+        VALUES (@id, @institution_id, @name, @code, @start_date, @end_date, @is_active, @created_at, @updated_at)
+      `);
+
+      this.stmtGetActiveDepartments = this.sqlite.prepare("SELECT * FROM departments WHERE institution_id = ? AND is_active = 1 ORDER BY name ASC");
+      this.stmtGetAllDepartments = this.sqlite.prepare("SELECT * FROM departments WHERE institution_id = ? ORDER BY name ASC");
+      this.stmtInsertDepartment = this.sqlite.prepare(`
+        INSERT INTO departments (id, institution_id, name, code, is_active, created_at, updated_at)
+        VALUES (@id, @institution_id, @name, @code, @is_active, @created_at, @updated_at)
+      `);
+
+      this.stmtGetActiveAcademicPrograms = this.sqlite.prepare("SELECT * FROM academic_programs WHERE institution_id = ? AND is_active = 1 ORDER BY name ASC");
+      this.stmtGetActiveAcademicProgramsByDept = this.sqlite.prepare("SELECT * FROM academic_programs WHERE institution_id = ? AND department_id = ? AND is_active = 1 ORDER BY name ASC");
+      this.stmtInsertAcademicProgram = this.sqlite.prepare(`
+        INSERT INTO academic_programs (id, institution_id, department_id, name, code, degree_type, total_semesters, is_active, created_at, updated_at)
+        VALUES (@id, @institution_id, @department_id, @name, @code, @degree_type, @total_semesters, @is_active, @created_at, @updated_at)
+      `);
+
+      this.stmtGetStudentEnrollment = this.sqlite.prepare(`
+        SELECT e.*, i.name as institution_name, i.code as institution_code,
+               t.name as term_name, t.code as term_code,
+               p.name as program_name, p.code as program_code
+        FROM student_enrollments e
+        LEFT JOIN institutions i ON e.institution_id = i.id
+        LEFT JOIN academic_terms t ON e.term_id = t.id
+        LEFT JOIN academic_programs p ON e.program_id = p.id
+        WHERE e.student_id = ? AND e.status = 'active'
+        ORDER BY e.created_at DESC
+        LIMIT 1
+      `);
+      this.stmtUpsertStudentEnrollment = this.sqlite.prepare(`
+        INSERT INTO student_enrollments (id, student_id, institution_id, term_id, program_id, semester, status, created_at, updated_at)
+        VALUES (@id, @student_id, @institution_id, @term_id, @program_id, @semester, @status, @created_at, @updated_at)
+        ON CONFLICT(student_id, term_id) DO UPDATE SET
+          institution_id = excluded.institution_id,
+          program_id = excluded.program_id,
+          semester = excluded.semester,
+          updated_at = excluded.updated_at
+      `);
+      this.stmtInsertStudentSubject = this.sqlite.prepare(`
+        INSERT OR IGNORE INTO student_subjects (student_id, subject_id, enrollment_id, created_at)
+        VALUES (?, ?, ?, ?)
+      `);
+      this.stmtGetStudentSubjects = this.sqlite.prepare(`
+        SELECT s.* FROM subjects s
+        JOIN student_subjects ss ON s.id = ss.subject_id
+        WHERE ss.student_id = ? AND s.is_active = 1
+        ORDER BY s.subject_name ASC
+      `);
+
+      this.stmtInsertAdminAuditLog = this.sqlite.prepare(`
+        INSERT INTO admin_audit_logs (id, admin_id, action, entity_type, entity_id, details_json, created_at)
+        VALUES (@id, @admin_id, @action, @entity_type, @entity_id, @details_json, @created_at)
+      `);
+      this.stmtGetAdminAuditLogs = this.sqlite.prepare("SELECT * FROM admin_audit_logs ORDER BY created_at DESC LIMIT ?");
     } catch (err) {
       console.error("[Database Error] Failed to prepare SQL statements:", err);
       throw err;
@@ -651,103 +861,178 @@ export class Database {
   }
 
   private seedMasterDataIfEmpty(): void {
-    const existing = this.sqlite.prepare("SELECT COUNT(*) as count FROM teachers").get() as { count: number };
-    if (existing && existing.count > 0) return;
+    const now = new Date().toISOString();
 
-    console.log("[Master Data] Seeding relational teachers, subjects, and topics...");
-    const seedTx = this.sqlite.transaction(() => {
-      const now = new Date().toISOString();
+    const teacherCount = (this.sqlite.prepare("SELECT COUNT(*) as count FROM teachers").get() as { count: number })?.count || 0;
+    if (teacherCount === 0) {
+      console.log("[Master Data] Seeding relational teachers, subjects, and topics...");
+      const seedTeachersTx = this.sqlite.transaction(() => {
+        // 1. Teachers
+        const teachers = [
+          { id: "teacher-jenkins", name: "Prof. Sarah Jenkins", email: "s.jenkins@learnix.edu", department: "Computer Science", designation: "Associate Professor" },
+          { id: "teacher-chen", name: "Prof. Marcus Chen", email: "m.chen@learnix.edu", department: "Computer Systems & Networks", designation: "Professor" },
+          { id: "teacher-peterson", name: "Dr. Alan Peterson", email: "a.peterson@learnix.edu", department: "Computer Science", designation: "Assistant Professor" },
+          { id: "teacher-sharma", name: "Dr. Priya Sharma", email: "p.sharma@learnix.edu", department: "Artificial Intelligence", designation: "Assistant Professor" },
+        ];
 
-      // 1. Teachers
-      const teachers = [
-        { id: "teacher-jenkins", name: "Prof. Sarah Jenkins", email: "s.jenkins@learnix.edu", department: "Computer Science", designation: "Associate Professor" },
-        { id: "teacher-chen", name: "Prof. Marcus Chen", email: "m.chen@learnix.edu", department: "Computer Systems & Networks", designation: "Professor" },
-        { id: "teacher-peterson", name: "Dr. Alan Peterson", email: "a.peterson@learnix.edu", department: "Computer Science", designation: "Assistant Professor" },
-        { id: "teacher-sharma", name: "Dr. Priya Sharma", email: "p.sharma@learnix.edu", department: "Artificial Intelligence", designation: "Assistant Professor" },
-      ];
+        for (const t of teachers) {
+          this.stmtInsertTeacher.run({
+            ...t,
+            is_active: 1,
+            created_at: now,
+            updated_at: now,
+          });
+        }
 
-      for (const t of teachers) {
-        this.stmtInsertTeacher.run({
-          ...t,
+        // 2. Subjects
+        const subjects = [
+          { id: "subj-dsa", subject_code: "CS-201", subject_name: "Data Structures & Algorithms", description: "Foundational abstract data types, linear structures, trees and graphs.", semester: "Semester 3", department: "Computer Science", sort_order: 1 },
+          { id: "subj-os", subject_code: "CS-301", subject_name: "Operating Systems & Virtual Memory", description: "Kernel design, memory virtualization, paging, and process scheduling.", semester: "Semester 5", department: "Computer Science", sort_order: 2 },
+          { id: "subj-net", subject_code: "CS-401", subject_name: "Computer Networks & Protocols", description: "TCP/IP architecture, socket protocols, sliding windows, and congestion.", semester: "Semester 5", department: "Computer Systems & Networks", sort_order: 3 },
+          { id: "subj-ai", subject_code: "CS-501", subject_name: "Artificial Intelligence & Machine Learning", description: "Search heuristics, neural representations, and natural language models.", semester: "Semester 7", department: "Artificial Intelligence", sort_order: 4 },
+        ];
+
+        for (const s of subjects) {
+          this.stmtInsertSubject.run({
+            ...s,
+            is_active: 1,
+            created_at: now,
+            updated_at: now,
+          });
+        }
+
+        // 3. Topics
+        const topics = [
+          // DSA
+          { id: "top-dsa-1", subject_id: "subj-dsa", topic_name: "Stack Basics & LIFO Architecture", description: "LIFO protocol, stack pointer, and memory layout.", sort_order: 1 },
+          { id: "top-dsa-2", subject_id: "subj-dsa", topic_name: "Push & Pop Pointer Operations", description: "Constant-time O(1) insertion, retrieval, and boundary guards.", sort_order: 2 },
+          { id: "top-dsa-3", subject_id: "subj-dsa", topic_name: "Queue Mechanics & FIFO Processing", description: "Dual-pointer enqueue and dequeue implementations.", sort_order: 3 },
+          { id: "top-dsa-4", subject_id: "subj-dsa", topic_name: "Binary Trees & Recursive Traversals", description: "In-order, pre-order, and post-order tree visitations.", sort_order: 4 },
+          { id: "top-dsa-5", subject_id: "subj-dsa", topic_name: "Hash Tables & Collision Resolution", description: "Hash functions, separate chaining, and open addressing.", sort_order: 5 },
+
+          // OS
+          { id: "top-os-1", subject_id: "subj-os", topic_name: "Virtual Memory Abstraction", description: "Contiguous virtual address space mapped dynamically onto RAM.", sort_order: 1 },
+          { id: "top-os-2", subject_id: "subj-os", topic_name: "Paging & Physical Frame Allocation", description: "Virtual page numbers, frame tables, and offset preservation.", sort_order: 2 },
+          { id: "top-os-3", subject_id: "subj-os", topic_name: "Page Faults & Disk Swapping", description: "Hardware trap triggers, page eviction, and swap I/O latency.", sort_order: 3 },
+          { id: "top-os-4", subject_id: "subj-os", topic_name: "TLB Caching & Translation Lookaside", description: "Hardware associative cache accelerating page translation.", sort_order: 4 },
+
+          // Networks
+          { id: "top-net-1", subject_id: "subj-net", topic_name: "TCP 3-Way Handshake State Machine", description: "SYN, SYN-ACK, ACK connection setup and ISN negotiation.", sort_order: 1 },
+          { id: "top-net-2", subject_id: "subj-net", topic_name: "Sliding Window Flow Control", description: "Advertised receiver window (rwnd) preventing buffer overflow.", sort_order: 2 },
+          { id: "top-net-3", subject_id: "subj-net", topic_name: "IP Addressing & Subnet Routing", description: "IPv4/IPv6 headers, CIDR masks, and router lookup tables.", sort_order: 3 },
+          { id: "top-net-4", subject_id: "subj-net", topic_name: "TCP Congestion Control Algorithms", description: "Slow start, congestion avoidance, fast retransmit, and AIMD.", sort_order: 4 },
+
+          // AI
+          { id: "top-ai-1", subject_id: "subj-ai", topic_name: "Heuristic Search & A* Pathfinding", description: "Admissible heuristics, frontier queues, and graph search.", sort_order: 1 },
+          { id: "top-ai-2", subject_id: "subj-ai", topic_name: "Neural Networks & Backpropagation", description: "Gradient descent, loss functions, and weight updates.", sort_order: 2 },
+          { id: "top-ai-3", subject_id: "subj-ai", topic_name: "Attention Mechanisms & Transformers", description: "Scaled dot-product attention and self-attention blocks.", sort_order: 3 },
+        ];
+
+        for (const top of topics) {
+          this.stmtInsertTopic.run({
+            ...top,
+            is_active: 1,
+            created_at: now,
+            updated_at: now,
+          });
+        }
+
+        // 4. Teacher-Subject Assignments
+        const assignments = [
+          { teacher_id: "teacher-jenkins", subject_id: "subj-dsa" },
+          { teacher_id: "teacher-chen", subject_id: "subj-net" },
+          { teacher_id: "teacher-peterson", subject_id: "subj-os" },
+          { teacher_id: "teacher-sharma", subject_id: "subj-ai" },
+          { teacher_id: "teacher-sharma", subject_id: "subj-dsa" },
+        ];
+
+        for (const a of assignments) {
+          this.stmtInsertTeacherSubject.run({
+            id: `ts-${a.teacher_id}-${a.subject_id}`,
+            teacher_id: a.teacher_id,
+            subject_id: a.subject_id,
+            created_at: now,
+          });
+        }
+      });
+      seedTeachersTx();
+    }
+
+    const instCount = (this.sqlite.prepare("SELECT COUNT(*) as count FROM institutions").get() as { count: number })?.count || 0;
+    if (instCount === 0) {
+      console.log("[Master Data] Seeding institutions, academic terms, programs, and student enrollments...");
+      const seedInstTx = this.sqlite.transaction(() => {
+        // 5. Default Academic Hierarchy & Demo Enrollment
+        const instId = "inst-mit";
+        this.stmtInsertInstitution.run({
+          id: instId,
+          name: "Massachusetts Institute of Technology (Demo)",
+          code: "MIT-ENG",
           is_active: 1,
           created_at: now,
           updated_at: now,
         });
-      }
 
-      // 2. Subjects
-      const subjects = [
-        { id: "subj-dsa", subject_code: "CS-201", subject_name: "Data Structures & Algorithms", description: "Foundational abstract data types, linear structures, trees and graphs.", semester: "Semester 3", department: "Computer Science", sort_order: 1 },
-        { id: "subj-os", subject_code: "CS-301", subject_name: "Operating Systems & Virtual Memory", description: "Kernel design, memory virtualization, paging, and process scheduling.", semester: "Semester 5", department: "Computer Science", sort_order: 2 },
-        { id: "subj-net", subject_code: "CS-401", subject_name: "Computer Networks & Protocols", description: "TCP/IP architecture, socket protocols, sliding windows, and congestion.", semester: "Semester 5", department: "Computer Systems & Networks", sort_order: 3 },
-        { id: "subj-ai", subject_code: "CS-501", subject_name: "Artificial Intelligence & Machine Learning", description: "Search heuristics, neural representations, and natural language models.", semester: "Semester 7", department: "Artificial Intelligence", sort_order: 4 },
-      ];
-
-      for (const s of subjects) {
-        this.stmtInsertSubject.run({
-          ...s,
+        const termId = "term-2025-2026";
+        this.stmtInsertAcademicTerm.run({
+          id: termId,
+          institution_id: instId,
+          name: "Academic Year 2025-2026 (Semester 5)",
+          code: "AY-2025-26-S5",
+          start_date: "2025-08-01",
+          end_date: "2026-05-31",
           is_active: 1,
           created_at: now,
           updated_at: now,
         });
-      }
 
-      // 3. Topics
-      const topics = [
-        // DSA
-        { id: "top-dsa-1", subject_id: "subj-dsa", topic_name: "Stack Basics & LIFO Architecture", description: "LIFO protocol, stack pointer, and memory layout.", sort_order: 1 },
-        { id: "top-dsa-2", subject_id: "subj-dsa", topic_name: "Push & Pop Pointer Operations", description: "Constant-time O(1) insertion, retrieval, and boundary guards.", sort_order: 2 },
-        { id: "top-dsa-3", subject_id: "subj-dsa", topic_name: "Queue Mechanics & FIFO Processing", description: "Dual-pointer enqueue and dequeue implementations.", sort_order: 3 },
-        { id: "top-dsa-4", subject_id: "subj-dsa", topic_name: "Binary Trees & Recursive Traversals", description: "In-order, pre-order, and post-order tree visitations.", sort_order: 4 },
-        { id: "top-dsa-5", subject_id: "subj-dsa", topic_name: "Hash Tables & Collision Resolution", description: "Hash functions, separate chaining, and open addressing.", sort_order: 5 },
-
-        // OS
-        { id: "top-os-1", subject_id: "subj-os", topic_name: "Virtual Memory Abstraction", description: "Contiguous virtual address space mapped dynamically onto RAM.", sort_order: 1 },
-        { id: "top-os-2", subject_id: "subj-os", topic_name: "Paging & Physical Frame Allocation", description: "Virtual page numbers, frame tables, and offset preservation.", sort_order: 2 },
-        { id: "top-os-3", subject_id: "subj-os", topic_name: "Page Faults & Disk Swapping", description: "Hardware trap triggers, page eviction, and swap I/O latency.", sort_order: 3 },
-        { id: "top-os-4", subject_id: "subj-os", topic_name: "TLB Caching & Translation Lookaside", description: "Hardware associative cache accelerating page translation.", sort_order: 4 },
-
-        // Networks
-        { id: "top-net-1", subject_id: "subj-net", topic_name: "TCP 3-Way Handshake State Machine", description: "SYN, SYN-ACK, ACK connection setup and ISN negotiation.", sort_order: 1 },
-        { id: "top-net-2", subject_id: "subj-net", topic_name: "Sliding Window Flow Control", description: "Advertised receiver window (rwnd) preventing buffer overflow.", sort_order: 2 },
-        { id: "top-net-3", subject_id: "subj-net", topic_name: "IP Addressing & Subnet Routing", description: "IPv4/IPv6 headers, CIDR masks, and router lookup tables.", sort_order: 3 },
-        { id: "top-net-4", subject_id: "subj-net", topic_name: "TCP Congestion Control Algorithms", description: "Slow start, congestion avoidance, fast retransmit, and AIMD.", sort_order: 4 },
-
-        // AI
-        { id: "top-ai-1", subject_id: "subj-ai", topic_name: "Heuristic Search & A* Pathfinding", description: "Admissible heuristics, frontier queues, and graph search.", sort_order: 1 },
-        { id: "top-ai-2", subject_id: "subj-ai", topic_name: "Neural Networks & Backpropagation", description: "Gradient descent, loss functions, and weight updates.", sort_order: 2 },
-        { id: "top-ai-3", subject_id: "subj-ai", topic_name: "Attention Mechanisms & Transformers", description: "Scaled dot-product attention and self-attention blocks.", sort_order: 3 },
-      ];
-
-      for (const top of topics) {
-        this.stmtInsertTopic.run({
-          ...top,
+        const deptId = "dept-cs";
+        this.stmtInsertDepartment.run({
+          id: deptId,
+          institution_id: instId,
+          name: "Department of Computer Science & Engineering",
+          code: "CSE",
           is_active: 1,
           created_at: now,
           updated_at: now,
         });
-      }
 
-      // 4. Teacher-Subject Assignments
-      const assignments = [
-        { teacher_id: "teacher-jenkins", subject_id: "subj-dsa" },
-        { teacher_id: "teacher-chen", subject_id: "subj-net" },
-        { teacher_id: "teacher-peterson", subject_id: "subj-os" },
-        { teacher_id: "teacher-sharma", subject_id: "subj-ai" },
-        { teacher_id: "teacher-sharma", subject_id: "subj-dsa" },
-      ];
-
-      for (const a of assignments) {
-        this.stmtInsertTeacherSubject.run({
-          id: `ts-${a.teacher_id}-${a.subject_id}`,
-          teacher_id: a.teacher_id,
-          subject_id: a.subject_id,
+        const progId = "prog-btech-cs";
+        this.stmtInsertAcademicProgram.run({
+          id: progId,
+          institution_id: instId,
+          department_id: deptId,
+          name: "Bachelor of Technology in Computer Science",
+          code: "BTECH-CS",
+          degree_type: "bachelors",
+          total_semesters: 8,
+          is_active: 1,
           created_at: now,
+          updated_at: now,
         });
-      }
-    });
 
-    seedTx();
+        // Enroll default student user-student-1 if present
+        const demoStudent = this.stmtGetUserById.get("user-student-1");
+        if (demoStudent) {
+          this.stmtUpsertStudentEnrollment.run({
+            id: "enr-student-1",
+            student_id: "user-student-1",
+            institution_id: instId,
+            term_id: termId,
+            program_id: progId,
+            semester: "Semester 5",
+            status: "active",
+            created_at: now,
+            updated_at: now,
+          });
+
+          for (const subj of ["subj-dsa", "subj-os", "subj-net", "subj-ai"]) {
+            this.stmtInsertStudentSubject.run("user-student-1", subj, "enr-student-1", now);
+          }
+        }
+      });
+      seedInstTx();
+    }
   }
 
   private isDemoEnabled(): boolean {
@@ -956,48 +1241,95 @@ export class Database {
     userId: string,
     userAgent?: string,
     ipAddress?: string
-  ): { token: string; expiresAt: Date } {
+  ): { token: string; session: UserSession; expiresAt: Date } {
     const rawToken = crypto.randomBytes(32).toString("hex");
     const tokenHash = hashToken(rawToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
     const now = new Date().toISOString();
+    const id = `sess-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
     this.stmtInsertSession.run({
-      id: `sess-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
+      id,
       token_hash: tokenHash,
       user_id: userId,
       expires_at: expiresAt.toISOString(),
       created_at: now,
+      last_activity_at: now,
+      revoked_at: null,
       user_agent: userAgent || null,
       ip_address: ipAddress || null,
     });
 
-    return { token: rawToken, expiresAt };
+    const session: UserSession = {
+      id,
+      userId,
+      sessionTokenHash: tokenHash,
+      createdAt: now,
+      expiresAt: expiresAt.toISOString(),
+      lastActivityAt: now,
+      revokedAt: null,
+      userAgent: userAgent || null,
+      ipAddress: ipAddress || null,
+    };
+
+    return { token: rawToken, session, expiresAt };
   }
 
-  public validateSession(rawToken: string): User | undefined {
-    if (!rawToken || typeof rawToken !== "string") return undefined;
+  public validateSession(
+    rawToken: string
+  ): ({ user: User; session: UserSession } & User) | null {
+    if (!rawToken || typeof rawToken !== "string") return null;
     const tokenHash = hashToken(rawToken);
 
-    const session = this.stmtGetSessionByHash.get(tokenHash) as {
+    const sessionRow = this.stmtGetSessionByHash.get(tokenHash) as {
       id: string;
       user_id: string;
       expires_at: string;
+      created_at: string;
+      last_activity_at?: string;
+      revoked_at?: string;
+      user_agent?: string;
+      ip_address?: string;
     } | undefined;
 
-    if (!session) return undefined;
-    return this.getUserById(session.user_id);
+    if (!sessionRow) return null;
+    if (sessionRow.revoked_at) return null;
+    if (new Date(sessionRow.expires_at).getTime() <= Date.now()) return null;
+
+    const user = this.getUserById(sessionRow.user_id);
+    if (!user) return null;
+
+    try {
+      this.stmtUpdateSessionActivity.run(new Date().toISOString(), sessionRow.id);
+    } catch (e) {}
+
+    const session: UserSession = {
+      id: sessionRow.id,
+      userId: sessionRow.user_id,
+      sessionTokenHash: tokenHash,
+      createdAt: sessionRow.created_at,
+      expiresAt: sessionRow.expires_at,
+      lastActivityAt: sessionRow.last_activity_at || sessionRow.created_at,
+      revokedAt: sessionRow.revoked_at || null,
+      userAgent: sessionRow.user_agent || null,
+      ipAddress: sessionRow.ip_address || null,
+    };
+
+    return Object.assign({}, user, { user, session });
   }
 
   public revokeSession(rawToken: string): boolean {
     if (!rawToken) return false;
     const tokenHash = hashToken(rawToken);
-    const res = this.stmtDeleteSessionByHash.run(tokenHash);
+    const now = new Date().toISOString();
+    const res = this.stmtRevokeSessionByHash.run(now, tokenHash);
     return res.changes > 0;
   }
 
-  public revokeAllUserSessions(userId: string): void {
-    this.stmtDeleteSessionsByUser.run(userId);
+  public revokeAllUserSessions(userId: string): number {
+    const now = new Date().toISOString();
+    const res = this.stmtRevokeSessionsByUser.run(now, userId);
+    return res.changes;
   }
 
   public createPasswordResetToken(userId: string): string {
@@ -1331,8 +1663,10 @@ export class Database {
     }
     return rows.map((r) => ({
       id: r.id,
-      subjectCode: r.subject_code,
+      name: r.subject_name,
       subjectName: r.subject_name,
+      code: r.subject_code,
+      subjectCode: r.subject_code,
       description: r.description || undefined,
       semester: r.semester || undefined,
       department: r.department || undefined,
@@ -1348,8 +1682,10 @@ export class Database {
     if (!r) return undefined;
     return {
       id: r.id,
-      subjectCode: r.subject_code,
+      name: r.subject_name,
       subjectName: r.subject_name,
+      code: r.subject_code,
+      subjectCode: r.subject_code,
       description: r.description || undefined,
       semester: r.semester || undefined,
       department: r.department || undefined,
@@ -1363,10 +1699,12 @@ export class Database {
   public createSubject(subject: Omit<Subject, "id" | "createdAt" | "updatedAt">): Subject {
     const id = `subj-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
     const now = new Date().toISOString();
+    const code = (subject.code || subject.subjectCode || "").trim().toUpperCase();
+    const name = (subject.name || subject.subjectName || "").trim();
     this.stmtInsertSubject.run({
       id,
-      subject_code: subject.subjectCode.trim().toUpperCase(),
-      subject_name: subject.subjectName.trim(),
+      subject_code: code,
+      subject_name: name,
       description: subject.description ? subject.description.trim() : null,
       semester: subject.semester ? subject.semester.trim() : null,
       department: subject.department ? subject.department.trim() : null,
@@ -1377,6 +1715,10 @@ export class Database {
     });
     return {
       id,
+      name,
+      subjectName: name,
+      code,
+      subjectCode: code,
       ...subject,
       isActive: subject.isActive ?? true,
       sortOrder: subject.sortOrder || 0,
@@ -1390,11 +1732,13 @@ export class Database {
     if (!current) return undefined;
     const now = new Date().toISOString();
     const updated = { ...current, ...updates, updatedAt: now };
+    const code = (updated.code || updated.subjectCode || "").trim().toUpperCase();
+    const name = (updated.name || updated.subjectName || "").trim();
 
     this.stmtUpdateSubject.run({
       id,
-      subject_code: updated.subjectCode.trim().toUpperCase(),
-      subject_name: updated.subjectName.trim(),
+      subject_code: code,
+      subject_name: name,
       description: updated.description ? updated.description.trim() : null,
       semester: updated.semester ? updated.semester.trim() : null,
       department: updated.department ? updated.department.trim() : null,
@@ -1402,7 +1746,13 @@ export class Database {
       sort_order: updated.sortOrder || 0,
       updated_at: now,
     });
-    return updated;
+    return {
+      ...updated,
+      name,
+      subjectName: name,
+      code,
+      subjectCode: code,
+    };
   }
 
   public deleteSubject(id: string): boolean {
@@ -1411,14 +1761,23 @@ export class Database {
   }
 
   public getTopics(subjectId?: string, activeOnly = true): Topic[] {
-    if (!subjectId) return [];
-    const stmt = activeOnly ? this.stmtGetActiveTopicsBySubject : this.stmtGetAllTopicsBySubject;
-    const rows = stmt.all(subjectId) as any[];
+    let rows: any[];
+    if (subjectId) {
+      const stmt = activeOnly ? this.stmtGetActiveTopicsBySubject : this.stmtGetAllTopicsBySubject;
+      rows = stmt.all(subjectId) as any[];
+    } else {
+      const query = activeOnly
+        ? "SELECT * FROM topics WHERE is_active = 1 ORDER BY sort_order ASC, topic_name ASC"
+        : "SELECT * FROM topics ORDER BY sort_order ASC, topic_name ASC";
+      rows = this.sqlite.prepare(query).all() as any[];
+    }
     return rows.map((r) => ({
       id: r.id,
       subjectId: r.subject_id,
+      name: r.topic_name,
       topicName: r.topic_name,
       description: r.description || undefined,
+      orderIndex: r.sort_order,
       sortOrder: r.sort_order,
       isActive: Boolean(r.is_active),
       createdAt: r.created_at,
@@ -1432,8 +1791,10 @@ export class Database {
     return {
       id: r.id,
       subjectId: r.subject_id,
+      name: r.topic_name,
       topicName: r.topic_name,
       description: r.description || undefined,
+      orderIndex: r.sort_order,
       sortOrder: r.sort_order,
       isActive: Boolean(r.is_active),
       createdAt: r.created_at,
@@ -1444,21 +1805,25 @@ export class Database {
   public createTopic(topic: Omit<Topic, "id" | "createdAt" | "updatedAt">): Topic {
     const id = `top-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
     const now = new Date().toISOString();
+    const name = (topic.name || topic.topicName || "").trim();
     this.stmtInsertTopic.run({
       id,
       subject_id: topic.subjectId,
-      topic_name: topic.topicName.trim(),
+      topic_name: name,
       description: topic.description ? topic.description.trim() : null,
-      sort_order: topic.sortOrder || 0,
+      sort_order: topic.orderIndex ?? topic.sortOrder ?? 0,
       is_active: topic.isActive ?? 1 ? 1 : 0,
       created_at: now,
       updated_at: now,
     });
     return {
       id,
+      name,
+      topicName: name,
+      orderIndex: topic.orderIndex ?? topic.sortOrder ?? 0,
+      sortOrder: topic.orderIndex ?? topic.sortOrder ?? 0,
       ...topic,
       isActive: topic.isActive ?? true,
-      sortOrder: topic.sortOrder || 0,
       createdAt: now,
       updatedAt: now,
     };
@@ -1469,16 +1834,21 @@ export class Database {
     if (!current) return undefined;
     const now = new Date().toISOString();
     const updated = { ...current, ...updates, updatedAt: now };
+    const name = (updated.name || updated.topicName || "").trim();
 
     this.stmtUpdateTopic.run({
       id,
-      topic_name: updated.topicName.trim(),
+      topic_name: name,
       description: updated.description ? updated.description.trim() : null,
-      sort_order: updated.sortOrder || 0,
+      sort_order: updated.orderIndex ?? updated.sortOrder ?? 0,
       is_active: updated.isActive ? 1 : 0,
       updated_at: now,
     });
-    return updated;
+    return {
+      ...updated,
+      name,
+      topicName: name,
+    };
   }
 
   public deleteTopic(id: string): boolean {
@@ -1503,6 +1873,438 @@ export class Database {
   public getTeacherSubjectIds(teacherId: string): string[] {
     const rows = this.stmtGetTeacherSubjectIds.all(teacherId) as { subject_id: string }[];
     return rows.map((r) => r.subject_id);
+  }
+
+  // =========================================================================
+  // ACADEMIC HIERARCHY METHODS
+  // =========================================================================
+
+  public getInstitutions(activeOnly = true): Institution[] {
+    const stmt = activeOnly ? this.stmtGetActiveInstitutions : this.stmtGetAllInstitutions;
+    const rows = stmt.all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public getInstitutionById(id: string): Institution | undefined {
+    const r = this.stmtGetInstitutionById.get(id) as any;
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  public createInstitution(inst: Omit<Institution, "id" | "createdAt" | "updatedAt">): Institution {
+    const id = `inst-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    this.stmtInsertInstitution.run({
+      id,
+      name: inst.name.trim(),
+      code: inst.code.trim().toUpperCase(),
+      is_active: inst.isActive ?? 1 ? 1 : 0,
+      created_at: now,
+      updated_at: now,
+    });
+    return {
+      id,
+      ...inst,
+      isActive: inst.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  public getAcademicTerms(institutionId: string, activeOnly = true): AcademicTerm[] {
+    const stmt = activeOnly ? this.stmtGetActiveAcademicTerms : this.stmtGetAllAcademicTerms;
+    const rows = stmt.all(institutionId) as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      institutionId: r.institution_id,
+      termName: r.name,
+      name: r.name,
+      code: r.code,
+      startDate: r.start_date || undefined,
+      endDate: r.end_date || undefined,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public createAcademicTerm(term: Omit<AcademicTerm, "id" | "createdAt" | "updatedAt">): AcademicTerm {
+    const id = `term-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    const name = (term.termName || term.name || "").trim();
+    const code = (term.code || name.replace(/[^A-Za-z0-9]/g, "").slice(0, 10)).trim().toUpperCase();
+    this.stmtInsertAcademicTerm.run({
+      id,
+      institution_id: term.institutionId,
+      name,
+      code,
+      start_date: term.startDate || null,
+      end_date: term.endDate || null,
+      is_active: term.isActive ?? 1 ? 1 : 0,
+      created_at: now,
+      updated_at: now,
+    });
+    return {
+      id,
+      ...term,
+      termName: name,
+      name,
+      code,
+      isActive: term.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  public getDepartments(institutionId: string, activeOnly = true): Department[] {
+    const stmt = activeOnly ? this.stmtGetActiveDepartments : this.stmtGetAllDepartments;
+    const rows = stmt.all(institutionId) as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      institutionId: r.institution_id,
+      name: r.name,
+      code: r.code,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public createDepartment(dept: Omit<Department, "id" | "createdAt" | "updatedAt">): Department {
+    const id = `dept-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    this.stmtInsertDepartment.run({
+      id,
+      institution_id: dept.institutionId,
+      name: dept.name.trim(),
+      code: dept.code.trim().toUpperCase(),
+      is_active: dept.isActive ?? 1 ? 1 : 0,
+      created_at: now,
+      updated_at: now,
+    });
+    return {
+      id,
+      ...dept,
+      isActive: dept.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  public getAcademicPrograms(institutionId: string, departmentId?: string, activeOnly = true): AcademicProgram[] {
+    let rows: any[];
+    if (departmentId) {
+      rows = this.stmtGetActiveAcademicProgramsByDept.all(institutionId, departmentId) as any[];
+    } else {
+      const q = activeOnly
+        ? "SELECT * FROM academic_programs WHERE institution_id = ? AND is_active = 1 ORDER BY name ASC"
+        : "SELECT * FROM academic_programs WHERE institution_id = ? ORDER BY name ASC";
+      rows = this.sqlite.prepare(q).all(institutionId) as any[];
+    }
+    return rows.map((r) => ({
+      id: r.id,
+      institutionId: r.institution_id,
+      departmentId: r.department_id,
+      name: r.name,
+      code: r.code,
+      degreeType: r.degree_type,
+      totalSemesters: r.total_semesters,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public createAcademicProgram(prog: Omit<AcademicProgram, "id" | "createdAt" | "updatedAt">): AcademicProgram {
+    const id = `prog-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    this.stmtInsertAcademicProgram.run({
+      id,
+      institution_id: prog.institutionId,
+      department_id: prog.departmentId,
+      name: prog.name.trim(),
+      code: prog.code.trim().toUpperCase(),
+      degree_type: prog.degreeType || "bachelors",
+      total_semesters: prog.totalSemesters || 8,
+      is_active: prog.isActive ?? 1 ? 1 : 0,
+      created_at: now,
+      updated_at: now,
+    });
+    return {
+      id,
+      ...prog,
+      degreeType: prog.degreeType || "bachelors",
+      totalSemesters: prog.totalSemesters || 8,
+      isActive: prog.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  // =========================================================================
+  // STUDENT ENROLLMENT & ACADEMIC CONTEXT
+  // =========================================================================
+
+  public getStudentAcademicContext(studentId: string): StudentAcademicContext {
+    const er = this.stmtGetStudentEnrollment.get(studentId) as any;
+    let enrollment: StudentEnrollment | undefined;
+    let enrolledSubjects: Subject[] = [];
+
+    if (er) {
+      enrollment = {
+        id: er.id,
+        studentId: er.student_id,
+        institutionId: er.institution_id,
+        academicTermId: er.term_id,
+        termId: er.term_id,
+        programId: er.program_id,
+        semester: er.semester,
+        rollNumber: er.roll_number || undefined,
+        status: er.status,
+        isActive: er.status === "active",
+        createdAt: er.created_at,
+        updatedAt: er.updated_at,
+      };
+
+      const subjRows = this.stmtGetStudentSubjects.all(studentId) as any[];
+      enrolledSubjects = subjRows.map((r) => ({
+        id: r.id,
+        name: r.subject_name,
+        subjectName: r.subject_name,
+        code: r.subject_code,
+        subjectCode: r.subject_code,
+        description: r.description || undefined,
+        semester: r.semester || undefined,
+        department: r.department || undefined,
+        isActive: Boolean(r.is_active),
+        sortOrder: r.sort_order,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+    }
+
+    if (enrolledSubjects.length === 0) {
+      enrolledSubjects = this.getSubjects(undefined, true);
+    }
+
+    const hasEnrollment = Boolean(enrollment);
+    const enrolledSubjectIds = enrolledSubjects.map((s) => s.id);
+    return {
+      studentId,
+      hasEnrollment,
+      enrollment,
+      enrolledSubjects,
+      enrolledSubjectIds,
+      semester: enrollment?.semester,
+    };
+  }
+
+  public enrollStudentInSubjects(
+    studentId: string,
+    institutionId: string,
+    termId: string,
+    programId: string,
+    semester: string,
+    subjectIds: string[]
+  ): void {
+    const now = new Date().toISOString();
+    const enrollId = `enr-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+
+    const tx = this.sqlite.transaction(() => {
+      this.stmtUpsertStudentEnrollment.run({
+        id: enrollId,
+        student_id: studentId,
+        institution_id: institutionId,
+        term_id: termId,
+        program_id: programId,
+        semester,
+        status: "active",
+        created_at: now,
+        updated_at: now,
+      });
+
+      for (const subjId of subjectIds) {
+        this.stmtInsertStudentSubject.run(studentId, subjId, enrollId, now);
+      }
+    });
+
+    tx();
+  }
+
+  public getStudentAllowedTeachers(studentId: string): Teacher[] {
+    const context = this.getStudentAcademicContext(studentId);
+    if (!context.enrolledSubjects || context.enrolledSubjects.length === 0) {
+      return this.getTeachers(true);
+    }
+
+    const subjectIds = context.enrolledSubjects.map((s) => s.id);
+    const placeholders = subjectIds.map(() => "?").join(",");
+    const rows = this.sqlite
+      .prepare(
+        `SELECT DISTINCT t.* FROM teachers t
+         JOIN teacher_subjects ts ON t.id = ts.teacher_id
+         WHERE ts.subject_id IN (${placeholders}) AND t.is_active = 1
+         ORDER BY t.name ASC`
+      )
+      .all(...subjectIds) as any[];
+
+    if (rows.length === 0) {
+      return this.getTeachers(true);
+    }
+
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email || undefined,
+      department: r.department,
+      designation: r.designation,
+      isActive: Boolean(r.is_active),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public getStudentAllowedSubjectsForTeacher(studentId: string, teacherId: string): Subject[] {
+    const context = this.getStudentAcademicContext(studentId);
+    const subjectIds = context.enrolledSubjects.map((s) => s.id);
+
+    if (subjectIds.length === 0) {
+      return this.getSubjects(teacherId, true);
+    }
+
+    const placeholders = subjectIds.map(() => "?").join(",");
+    const rows = this.sqlite
+      .prepare(
+        `SELECT s.* FROM subjects s
+         JOIN teacher_subjects ts ON s.id = ts.subject_id
+         WHERE ts.teacher_id = ?
+           AND s.id IN (${placeholders})
+           AND s.is_active = 1
+         ORDER BY s.sort_order ASC, s.subject_name ASC`
+      )
+      .all(teacherId, ...subjectIds) as any[];
+
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.subject_name,
+      subjectName: r.subject_name,
+      code: r.subject_code,
+      subjectCode: r.subject_code,
+      description: r.description || undefined,
+      semester: r.semester || undefined,
+      department: r.department || undefined,
+      isActive: Boolean(r.is_active),
+      sortOrder: r.sort_order,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  public validateStudentLectureCreation(
+    studentId: string,
+    teacherId: string,
+    subjectId: string,
+    topicIds?: string[]
+  ): { valid: boolean; reason?: string } {
+    // 1. Verify Teacher exists and is active
+    const teacher = this.getTeacherById(teacherId);
+    if (!teacher || !teacher.isActive) {
+      return { valid: false, reason: "Teacher does not exist or is inactive." };
+    }
+
+    // 2. Verify Subject exists and is active
+    const subject = this.getSubjectById(subjectId);
+    if (!subject || !subject.isActive) {
+      return { valid: false, reason: "Subject does not exist or is inactive." };
+    }
+
+    // 3. Verify Teacher is assigned to this Subject
+    const assigned = this.sqlite
+      .prepare("SELECT 1 FROM teacher_subjects WHERE teacher_id = ? AND subject_id = ?")
+      .get(teacherId, subjectId);
+    if (!assigned) {
+      return {
+        valid: false,
+        reason: `Teacher ${teacher.name} is not assigned to teach ${subject.name || subject.subjectName}.`,
+      };
+    }
+
+    // 4. Verify Student is enrolled in this Subject
+    const context = this.getStudentAcademicContext(studentId);
+    const isEnrolled = context.enrolledSubjects.some((s) => s.id === subjectId);
+    if (!isEnrolled) {
+      return {
+        valid: false,
+        reason: `Student is not enrolled in ${subject.name || subject.subjectName} for their current academic term.`,
+      };
+    }
+
+    // 5. If topicIds provided, verify they belong to this Subject
+    if (topicIds && topicIds.length > 0) {
+      const placeholders = topicIds.map(() => "?").join(",");
+      const topicCount = this.sqlite
+        .prepare(`SELECT COUNT(*) as count FROM topics WHERE id IN (${placeholders}) AND subject_id = ?`)
+        .get(...topicIds, subjectId) as { count: number };
+      if (topicCount.count !== topicIds.length) {
+        return {
+          valid: false,
+          reason: "One or more selected topics do not belong to the selected subject.",
+        };
+      }
+    }
+
+    return { valid: true };
+  }
+
+  // =========================================================================
+  // ADMIN AUDIT LOGS
+  // =========================================================================
+
+  public recordAdminAuditLog(
+    adminId: string,
+    action: string,
+    entityType: string,
+    entityId?: string,
+    details?: any
+  ): void {
+    const id = `audit-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+    const now = new Date().toISOString();
+    this.stmtInsertAdminAuditLog.run({
+      id,
+      admin_id: adminId,
+      action,
+      entity_type: entityType,
+      entity_id: entityId || null,
+      details_json: details ? JSON.stringify(details) : null,
+      created_at: now,
+    });
+  }
+
+  public getAdminAuditLogs(limit = 100): AdminAuditLog[] {
+    const rows = this.stmtGetAdminAuditLogs.all(limit) as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      adminId: r.admin_id,
+      action: r.action,
+      entityType: r.entity_type,
+      entityId: r.entity_id || undefined,
+      detailsJson: r.details_json || undefined,
+      createdAt: r.created_at,
+    }));
   }
 
   // =========================================================================
@@ -1825,8 +2627,37 @@ export class Database {
   }
 
   // =========================================================================
-  // UTILITY METHODS
+  // UTILITY & HEALTH METHODS
   // =========================================================================
+
+  public async checkHealth(): Promise<DatabaseHealth> {
+    const start = Date.now();
+    try {
+      this.sqlite.prepare("SELECT 1").get();
+      let migrationVersion = 7;
+      try {
+        const row = this.sqlite.prepare("SELECT COUNT(*) as count FROM _migrations").get() as { count: number };
+        if (row && typeof row.count === "number") migrationVersion = row.count;
+      } catch {}
+      return {
+        status: "healthy",
+        engine: "sqlite",
+        provider: "sqlite",
+        connected: true,
+        migrationVersion,
+        latencyMs: Date.now() - start,
+      };
+    } catch (e) {
+      return {
+        status: "unhealthy",
+        engine: "sqlite",
+        provider: "sqlite",
+        connected: false,
+        migrationVersion: 0,
+        latencyMs: Date.now() - start,
+      };
+    }
+  }
 
   public close(): void {
     try {

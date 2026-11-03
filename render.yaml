@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: learnix-ai-os
+    env: node
+    plan: standard
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: ENABLE_DEMO_ACCOUNT
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: learnix-db
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: "https://learnix-ai-os.onrender.com"
+      - key: STORAGE_PROVIDER
+        value: local
+
+databases:
+  - name: learnix-db
+    plan: starter
+    databaseName: learnix
+    user: learnix
+    region: oregon

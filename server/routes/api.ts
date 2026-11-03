@@ -9,6 +9,7 @@ import { askTheLecture, searchLectureContent } from "../services/ragService";
 import { generateQuizForLecture } from "../services/quizService";
 import { evaluateQuizAndDetectWeakTopics } from "../services/weakTopicService";
 import { aiOrchestrator } from "../services/aiOrchestrator";
+import { storageProvider } from "../services/storageProvider";
 
 const router = express.Router();
 const upload = multer({ limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
@@ -21,6 +22,25 @@ const COOKIE_OPTIONS = {
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   path: "/",
 };
+
+// ----------------------------------------------------
+// CSRF PROTECTION MIDDLEWARE
+// ----------------------------------------------------
+router.use((req: Request, res: Response, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const authHeader = req.headers.authorization || "";
+  if (authHeader.startsWith("Bearer ")) return next();
+
+  // If session authenticates via HttpOnly cookie in production:
+  const cookieToken = req.cookies?.[COOKIE_NAME];
+  if (cookieToken && process.env.NODE_ENV === "production") {
+    const csrfHeader = req.headers["x-csrf-token"] || req.headers["x-requested-with"];
+    if (!csrfHeader) {
+      return res.status(403).json({ error: "CSRF verification failed: Missing required security header." });
+    }
+  }
+  next();
+});
 
 // ----------------------------------------------------
 // RATE LIMITING FOR AUTHENTICATION
@@ -545,6 +565,116 @@ router.delete("/master/teacher-subjects", (req: Request, res: Response) => {
 });
 
 // ----------------------------------------------------
+// ACADEMIC MASTER DATA & CONFLICT PREVENTION ENDPOINTS
+// ----------------------------------------------------
+router.get("/academic/institutions", async (req: Request, res: Response) => {
+  try {
+    const insts = await db.getInstitutions(true);
+    res.json(insts);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to load institutions." });
+  }
+});
+
+router.get("/academic/student-context", async (req: Request, res: Response) => {
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  try {
+    const context = await db.getStudentAcademicContext(user.id);
+    const allowedTeachers = await db.getStudentAllowedTeachers(user.id);
+    res.json({
+      ...context,
+      allowedTeachers,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to load student academic context." });
+  }
+});
+
+router.get("/academic/teachers", async (req: Request, res: Response) => {
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  try {
+    const teachers = await db.getStudentAllowedTeachers(user.id);
+    res.json(teachers);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch allowed teachers." });
+  }
+});
+
+router.get("/academic/subjects", async (req: Request, res: Response) => {
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const teacherId = req.query.teacherId as string | undefined;
+  try {
+    if (teacherId) {
+      const subjects = await db.getStudentAllowedSubjectsForTeacher(user.id, teacherId);
+      return res.json(subjects);
+    }
+    const context = await db.getStudentAcademicContext(user.id);
+    res.json(context.enrolledSubjects || []);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch allowed subjects." });
+  }
+});
+
+router.get("/academic/topics", async (req: Request, res: Response) => {
+  const subjectId = req.query.subjectId as string | undefined;
+  if (!subjectId) {
+    return res.status(400).json({ error: "subjectId query parameter is required." });
+  }
+
+  try {
+    const topics = await db.getTopics(subjectId, true);
+    res.json(topics);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch topics." });
+  }
+});
+
+router.post("/academic/enroll", async (req: Request, res: Response) => {
+  const user = requireAuth(req, res);
+  if (!user) return;
+
+  const { institutionId, termId, programId, semester = "Semester 1", subjectIds = [] } = req.body || {};
+  if (!institutionId || !termId || !programId) {
+    return res.status(400).json({ error: "institutionId, termId, and programId are required." });
+  }
+
+  try {
+    await db.enrollStudentInSubjects(user.id, institutionId, termId, programId, semester, subjectIds);
+    const updatedContext = await db.getStudentAcademicContext(user.id);
+    res.json({ success: true, context: updatedContext });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to enroll student in subjects." });
+  }
+});
+
+// ----------------------------------------------------
+// DURABLE AUDIO RETRIEVAL ENDPOINT
+// ----------------------------------------------------
+router.get("/storage/audio/*", async (req: Request, res: Response) => {
+  const key = (req.params as any)[0];
+  if (!key) return res.status(400).json({ error: "Audio key is required" });
+
+  try {
+    const buffer = await storageProvider.getObject(key);
+    if (!buffer) {
+      return res.status(404).json({ error: "Audio file not found" });
+    }
+    const ext = key.endsWith(".mp3") ? "audio/mpeg" : key.endsWith(".wav") ? "audio/wav" : "audio/webm";
+    res.setHeader("Content-Type", ext);
+    res.setHeader("Content-Length", buffer.length);
+    res.send(buffer);
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to stream audio file" });
+  }
+});
+
+// ----------------------------------------------------
 // LECTURE CRUD ROUTES
 // ----------------------------------------------------
 router.get("/lectures", (req: Request, res: Response) => {
@@ -572,7 +702,14 @@ router.post("/lectures", (req: Request, res: Response) => {
   let finalSubject = String(subject || "").trim();
   let finalInstructor = String(instructor || "").trim();
 
-  // Validate relational master IDs if provided
+  // Validate relational master IDs and conflict prevention if provided
+  if (teacherId && subjectId) {
+    const val = db.validateStudentLectureCreation(user.id, teacherId, subjectId, topicIds);
+    if (!val.valid) {
+      return res.status(400).json({ error: val.reason || "Invalid teacher/subject combination." });
+    }
+  }
+
   if (teacherId) {
     const t = db.getTeacherById(teacherId);
     if (t) {
@@ -583,7 +720,7 @@ router.post("/lectures", (req: Request, res: Response) => {
   if (subjectId) {
     const s = db.getSubjectById(subjectId);
     if (s) {
-      finalSubject = s.subjectName;
+      finalSubject = s.subjectName || s.name;
     }
   }
 
@@ -902,13 +1039,21 @@ router.post("/lectures/upload", upload.single("file"), async (req: Request, res:
   let finalSubject = String(subject).trim();
   let finalInstructor = String(instructor).trim();
 
+  // Validate relational master IDs and conflict prevention if provided
+  if (teacherId && subjectId) {
+    const val = db.validateStudentLectureCreation(user.id, teacherId, subjectId, topicIds);
+    if (!val.valid) {
+      return res.status(400).json({ error: val.reason || "Invalid teacher/subject combination." });
+    }
+  }
+
   if (teacherId) {
     const t = db.getTeacherById(teacherId);
     if (t) finalInstructor = t.name;
   }
   if (subjectId) {
     const s = db.getSubjectById(subjectId);
-    if (s) finalSubject = s.subjectName;
+    if (s) finalSubject = s.subjectName || s.name;
   }
 
   const newLecture: Lecture = {

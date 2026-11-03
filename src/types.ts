@@ -226,7 +226,7 @@ export interface Lecture {
   chapters: Chapter[];
   notes: SmartNoteSection[];
   quiz?: Quiz;
-  attempts: QuizAttempt[];
+  attempts?: QuizAttempt[];
   weakTopics: WeakTopic[];
   processingProgress?: ProcessingProgress;
   createdBy: string;
@@ -238,13 +238,91 @@ export interface Lecture {
   language?: string;
 }
 
+export interface Institution {
+  id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AcademicTerm {
+  id: string;
+  institutionId: string;
+  termName: string;
+  name?: string;
+  code?: string;
+  startDate?: string;
+  endDate?: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Department {
+  id: string;
+  institutionId: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AcademicProgram {
+  id: string;
+  institutionId: string;
+  departmentId: string;
+  name: string;
+  code: string;
+  degreeType?: string;
+  totalSemesters?: number;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudentEnrollment {
+  id: string;
+  studentId: string;
+  institutionId: string;
+  academicTermId?: string;
+  termId?: string;
+  programId: string;
+  semester: string;
+  rollNumber?: string;
+  status?: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudentAcademicContext {
+  studentId: string;
+  hasEnrollment: boolean;
+  institution?: Institution;
+  academicTerm?: AcademicTerm;
+  department?: Department;
+  program?: AcademicProgram;
+  semester?: string;
+  enrollment?: StudentEnrollment;
+  enrolledSubjectIds: string[];
+  enrolledSubjects?: Subject[];
+  allowedTeachers?: Teacher[];
+}
+
 export interface Teacher {
   id: string;
   name: string;
   email?: string;
   department: string;
   designation: string;
+  avatar?: string;
   isActive: boolean;
+  institutionId?: string;
+  departmentId?: string;
+  employeeCode?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -253,11 +331,17 @@ export interface Subject {
   id: string;
   subjectCode: string;
   subjectName: string;
+  name?: string;
+  code?: string;
   description?: string;
   semester?: string;
   department?: string;
+  color?: string;
   isActive: boolean;
   sortOrder: number;
+  institutionId?: string;
+  academicTermId?: string;
+  programId?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -266,8 +350,10 @@ export interface Topic {
   id: string;
   subjectId: string;
   topicName: string;
+  name?: string;
   description?: string;
   sortOrder: number;
+  orderIndex?: number;
   isActive: boolean;
   createdAt?: string;
   updatedAt?: string;

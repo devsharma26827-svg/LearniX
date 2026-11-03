@@ -1,0 +1,39 @@
+-- 001_core_tables.sql
+CREATE TABLE IF NOT EXISTS _migrations (
+  id VARCHAR(255) PRIMARY KEY,
+  applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(255) PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  password_hash TEXT,
+  role VARCHAR(50) NOT NULL DEFAULT 'student',
+  is_verified BOOLEAN NOT NULL DEFAULT TRUE,
+  status VARCHAR(50) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  data_json JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(LOWER(email));
+
+CREATE TABLE IF NOT EXISTS lectures (
+  id VARCHAR(255) PRIMARY KEY,
+  title VARCHAR(500) NOT NULL,
+  subject VARCHAR(255) NOT NULL,
+  created_by VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source VARCHAR(50) NOT NULL DEFAULT 'live',
+  status VARCHAR(50) NOT NULL DEFAULT 'ready',
+  date VARCHAR(100),
+  teacher_id VARCHAR(255),
+  subject_id VARCHAR(255),
+  language VARCHAR(50) DEFAULT 'auto',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  data_json JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_lectures_created_by ON lectures(created_by);
+CREATE INDEX IF NOT EXISTS idx_lectures_source ON lectures(source);
+CREATE INDEX IF NOT EXISTS idx_lectures_status ON lectures(status);

@@ -1,17 +1,14 @@
+import "./server/env";
 import express from "express";
 import path from "path";
 import cors from "cors";
-import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { exec } from "child_process";
 import { createServer as createViteServer } from "vite";
 import apiRoutes from "./server/routes/api";
 import { db } from "./server/db";
-
-// Load environment variables (.env and optional .env.local)
-dotenv.config();
-dotenv.config({ path: ".env.local", override: true });
+import { storageProvider } from "./server/services/storageProvider";
 
 function openBrowser(url: string) {
   const startCmd =
@@ -30,6 +27,9 @@ function openBrowser(url: string) {
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 4242;
+
+  // Cloud & Reverse Proxy trust configuration (Render, Heroku, AWS ALB)
+  app.set("trust proxy", 1);
 
   // 1. Security Headers
   app.use(
@@ -61,14 +61,44 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  // API Health Check
-  app.get("/api/health", (req, res) => {
+  // API Health Checks (Liveness, Readiness, General)
+  app.get("/api/health/live", (req, res) => {
+    res.status(200).json({ status: "live", uptime: process.uptime() });
+  });
+
+  app.get("/api/health/ready", async (req, res) => {
+    try {
+      const dbHealth = await db.checkHealth();
+      const storageDiag = storageProvider.getDiagnostics();
+      const isReady = dbHealth.status === "healthy" && dbHealth.connected;
+      const responsePayload = {
+        status: isReady ? "ready" : "not_ready",
+        database: {
+          provider: dbHealth.provider,
+          connected: dbHealth.connected,
+          migrationVersion: dbHealth.migrationVersion,
+          latencyMs: dbHealth.latencyMs,
+        },
+        storage: {
+          provider: storageDiag.provider,
+          configured: storageDiag.configured,
+        },
+      };
+      return res.status(isReady ? 200 : 503).json(responsePayload);
+    } catch (e: any) {
+      return res.status(503).json({ status: "not_ready", error: e?.message || "Health check failed" });
+    }
+  });
+
+  app.get("/api/health", async (req, res) => {
+    const dbHealth = await db.checkHealth().catch(() => ({ status: "unhealthy", engine: "unknown", latencyMs: -1 }));
     res.json({
-      status: "ok",
+      status: dbHealth.status === "healthy" ? "ok" : "degraded",
       appName: "LearniX",
       tagline: "TURN EVERY LECTURE INTO INTELLIGENS",
       time: new Date().toISOString(),
       port: PORT,
+      database: dbHealth,
       geminiKeyConfigured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       demoEnabled: process.env.ENABLE_DEMO_ACCOUNT === "true" || process.env.NODE_ENV !== "production",
     });
