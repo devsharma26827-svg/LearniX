@@ -20,7 +20,8 @@
     "test:quota": "tsx scripts/test_quota_and_job_queue.ts",
     "test:wizard": "tsx scripts/test_live_wizard_suite.ts",
     "test:fixes": "tsx scripts/test_final_bug_fixes.ts",
-    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts && tsx scripts/test_quota_and_job_queue.ts && tsx scripts/test_live_wizard_suite.ts && tsx scripts/test_final_bug_fixes.ts"
+    "test:render": "tsx scripts/test_render_production_serving.ts",
+    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts && tsx scripts/test_quota_and_job_queue.ts && tsx scripts/test_live_wizard_suite.ts && tsx scripts/test_final_bug_fixes.ts && tsx scripts/test_render_production_serving.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -12,6 +12,8 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: DB_PROVIDER
+        value: postgresql
       - key: ENABLE_DEMO_ACCOUNT
         value: "false"
       - key: DATABASE_URL
@@ -23,7 +25,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: ALLOWED_ORIGINS
-        value: "https://learnix-ai-os.onrender.com"
+        value: "https://learnix-ai-os.onrender.com,https://learnix-kq6k.onrender.com"
       - key: STORAGE_PROVIDER
         value: local
 

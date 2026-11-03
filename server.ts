@@ -1,14 +1,39 @@
 import "./server/env";
 import express from "express";
 import path from "path";
+import fs from "fs";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { exec } from "child_process";
-import { createServer as createViteServer } from "vite";
 import apiRoutes from "./server/routes/api";
 import { db } from "./server/db";
 import { storageProvider } from "./server/services/storageProvider";
+
+/**
+ * Robust Client Dist Path Resolver
+ * Accurately locates index.html whether running through:
+ * 1. tsx server.ts (from repository root)
+ * 2. node dist/server.cjs (bundled production binary inside dist/)
+ * 3. Render cloud container deployment
+ */
+function resolveClientDist(): string {
+  const candidates = [
+    path.resolve(__dirname),
+    path.resolve(__dirname, "..", "dist"),
+    path.resolve(process.cwd(), "dist"),
+    path.resolve(process.cwd()),
+  ];
+
+  for (const candidate of candidates) {
+    const indexPath = path.join(candidate, "index.html");
+    if (fs.existsSync(indexPath)) {
+      return candidate;
+    }
+  }
+
+  return path.resolve(process.cwd(), "dist");
+}
 
 function openBrowser(url: string) {
   const startCmd =
@@ -31,10 +56,30 @@ async function startServer() {
   // Cloud & Reverse Proxy trust configuration (Render, Heroku, AWS ALB)
   app.set("trust proxy", 1);
 
+  // Robust Production Detection:
+  // True if:
+  // 1. NODE_ENV === 'production'
+  // 2. Render cloud platform environment (RENDER=true or RENDER_EXTERNAL_HOSTNAME)
+  // 3. Executing from compiled production bundle (server.cjs / dist)
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.RENDER === "true" ||
+    Boolean(process.env.RENDER_EXTERNAL_HOSTNAME) ||
+    (typeof __filename !== "undefined" && (
+      __filename.endsWith("server.cjs") ||
+      __filename.includes("dist" + path.sep + "server.cjs") ||
+      __filename.includes("/dist/") ||
+      __filename.includes("\\dist\\")
+    ));
+
+  if (isProduction) {
+    process.env.NODE_ENV = "production";
+  }
+
   // 1. Security Headers
   app.use(
     helmet({
-      contentSecurityPolicy: false, // Vite injects inline scripts/styles in dev
+      contentSecurityPolicy: false, // Vite injects inline scripts/styles in dev; safe SPA defaults
       crossOriginEmbedderPolicy: false,
     })
   );
@@ -43,6 +88,12 @@ async function startServer() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
     : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
+
+  if (process.env.RENDER_EXTERNAL_HOSTNAME) {
+    const renderHost = process.env.RENDER_EXTERNAL_HOSTNAME.trim();
+    allowedOrigins.push(`https://${renderHost}`);
+    allowedOrigins.push(`http://${renderHost}`);
+  }
 
   app.use(
     cors({
@@ -107,18 +158,61 @@ async function startServer() {
   // API Routes
   app.use("/api", apiRoutes);
 
-  // Vite Middleware in Dev / Static Serving in Prod
-  if (process.env.NODE_ENV !== "production") {
+  // Catch-all for undefined /api routes: return JSON 404, never index.html
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({
+      error: "API endpoint not found",
+      method: req.method,
+      path: req.originalUrl,
+    });
+  });
+
+  // Frontend Integration: Development (dynamic Vite dev middleware) vs Production (compiled static assets)
+  if (!isProduction) {
+    console.log("[LearniX] Starting in DEVELOPMENT mode with Vite dev middleware...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    const clientDist = resolveClientDist();
+    const indexPath = path.join(clientDist, "index.html");
+
+    if (fs.existsSync(indexPath)) {
+      console.log(`[LearniX] Production mode active. Serving static frontend assets from: ${clientDist}`);
+    } else {
+      console.error(
+        `[LearniX FATAL] Production frontend build not found at: ${clientDist}\n` +
+        `Please ensure 'npm run build' was executed before starting the server in production.`
+      );
+    }
+
+    // 1. Serve static files (assets, images, scripts) with caching
+    app.use(
+      express.static(clientDist, {
+        index: false, // Prevent serving index.html on directory matches; let SPA fallback handle it
+        maxAge: "1d",
+      })
+    );
+
+    // 2. React Router SPA Fallback: All GET requests return index.html
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(500).send("Frontend build missing. Please run 'npm run build'.");
+      }
+    });
+
+    // 3. Catch-all for non-GET non-API requests that didn't match any route
+    app.use((req, res) => {
+      res.status(404).json({
+        error: "Resource not found",
+        method: req.method,
+        path: req.originalUrl,
+      });
     });
   }
 

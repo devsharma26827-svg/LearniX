@@ -747,4 +747,17 @@ type WizardStep = 'TEACHER' | 'SUBJECT' | 'TOPIC' | 'LANGUAGE' | 'TITLE';
 
 ---
 
+### Question 17: What caused the 'Blocked request. This host (learnix-kq6k.onrender.com) is not allowed' error on Render, and how did you resolve it?
+**Answer:**
+> "The error was caused by the Vite development server middleware being unintentionally mounted in production:
+> 1. In `server.ts`, the server used `if (process.env.NODE_ENV !== 'production')` to mount `vite.middlewares`. When deployed to Render without an explicit `NODE_ENV=production` dashboard variable, `NODE_ENV` was `undefined`, causing Express to boot in development mode and mount Vite dev middleware instead of serving static files.
+> 2. In Vite 6, `vite.middlewares` enforces host checking and blocks any host header not in `server.allowedHosts` (which defaults only to `localhost`).
+> 3. We permanently resolved this by:
+>    - Enhancing `server/env.ts` and `server.ts` to automatically enforce `process.env.NODE_ENV = 'production'` whenever running from `dist/server.cjs` or when Render cloud environment variables (`RENDER=true` or `RENDER_EXTERNAL_HOSTNAME`) are detected.
+>    - Removing the static top-level `createViteServer` import and replacing it with a dynamic import used strictly when `!isProduction`.
+>    - Re-architecting Express static serving: Express locates the pre-built `dist/` directory via `resolveClientDist()`, serves hashed assets with caching, routes all frontend SPA navigation (`/dashboard`, `/lectures/*`) to `dist/index.html`, and guards `/api/*` so non-existent API routes return JSON 404 responses instead of HTML.
+>    - Setting explicit, safe `allowedHosts` in `vite.config.ts` (including `RENDER_EXTERNAL_HOSTNAME`), strictly avoiding `allowedHosts: true`."
+
+---
+
 *Document finalized and verified against local repository state. All automated test suites executing cleanly.*

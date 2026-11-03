@@ -509,19 +509,20 @@ async function runTestSuite() {
     transcriptionScheduler.clearQueue();
     transcriptionScheduler.setRpm(60);
 
+    const testTime = Date.now();
     const userARes = await transcribeAudioChunk({
       audioBase64: createValidWavBase64(0.7),
       mimeType: "audio/wav",
       currentTimestamp: 0,
-      lectureId: "lec-user-a",
-      userId: "user-a",
+      lectureId: `lec-user-a-${testTime}`,
+      userId: `user-a-${testTime}`,
     });
     const userBRes = await transcribeAudioChunk({
       audioBase64: createValidWavBase64(1.1),
       mimeType: "audio/wav",
       currentTimestamp: 0,
-      lectureId: "lec-user-b",
-      userId: "user-b",
+      lectureId: `lec-user-b-${testTime}`,
+      userId: `user-b-${testTime}`,
     });
 
     assert(userARes.length > 0);
