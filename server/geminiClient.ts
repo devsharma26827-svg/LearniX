@@ -1,42 +1,16 @@
 import { GoogleGenAI } from "@google/genai";
+import { getAiConfig } from "./config/aiConfig";
 
 let aiInstance: GoogleGenAI | null = null;
 let isMockSet = false;
-let warningLogged = false;
 
 /**
- * Resolves the Gemini API key from environment variables using a consistent strategy.
- * Prioritizes GEMINI_API_KEY, falls back to GOOGLE_API_KEY.
- * Warns if both are set with conflicting values, without logging the keys.
+ * Resolves the Gemini API key via the centralized AiConfig module.
+ * Prioritizes GEMINI_API_KEY, falls back to GOOGLE_API_KEY with one startup warning.
  */
 export function resolveGeminiApiKey(): string | null {
-  const geminiKey = process.env.GEMINI_API_KEY?.trim() || "";
-  const googleKey = process.env.GOOGLE_API_KEY?.trim() || "";
-
-  if (geminiKey && googleKey) {
-    if (geminiKey !== googleKey && !warningLogged) {
-      console.warn(
-        `[GEMINI] Warning: Both GEMINI_API_KEY and GOOGLE_API_KEY are configured with different values. Prioritizing GEMINI_API_KEY.`
-      );
-      warningLogged = true;
-    }
-    // Harmonize environment so internal SDK checks don't fire duplicate warnings
-    process.env.GOOGLE_API_KEY = geminiKey;
-    process.env.GEMINI_API_KEY = geminiKey;
-    return geminiKey;
-  }
-
-  if (geminiKey) {
-    process.env.GOOGLE_API_KEY = geminiKey;
-    return geminiKey;
-  }
-
-  if (googleKey) {
-    process.env.GEMINI_API_KEY = googleKey;
-    return googleKey;
-  }
-
-  return null;
+  const config = getAiConfig();
+  return config.apiKey;
 }
 
 export function getGeminiClient(): GoogleGenAI | null {
@@ -76,11 +50,17 @@ export function setMockGeminiClient(mock: GoogleGenAI | null) {
 export function resetGeminiClient() {
   aiInstance = null;
   isMockSet = false;
-  warningLogged = false;
 }
 
 export const MODELS = {
-  TEXT: process.env.GEMINI_TEXT_MODEL || "gemini-3.7-flash",
-  TRANSCRIBE: process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-3.5-transcribe",
-  EMBEDDING: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2-preview",
+  get TEXT() {
+    return getAiConfig().models.text;
+  },
+  get TRANSCRIBE() {
+    return getAiConfig().models.transcribe;
+  },
+  get EMBEDDING() {
+    return getAiConfig().models.embedding;
+  },
 };
+

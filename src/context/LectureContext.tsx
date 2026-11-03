@@ -34,6 +34,9 @@ interface LiveSessionState {
   audioDataArray: Uint8Array | null;
   errorMessage: string | null;
   hasMicrophoneConsent: boolean;
+  quotaExhausted: boolean;
+  pendingChunksCount: number;
+  quotaMessage: string | null;
 }
 
 interface LectureContextType {
@@ -75,6 +78,7 @@ interface LectureContextType {
   pauseLiveLecture: () => void;
   resumeLiveLecture: () => void;
   stopLiveLecture: () => Promise<void>;
+  retryPendingTranscription: (lectureId?: string) => Promise<void>;
   processLearningPack: (lectureId: string) => Promise<void>;
   askLectureQuestion: (question: string) => Promise<RagResponse>;
   submitQuizAttempt: (answers: Record<string, string>) => Promise<{ attempt: QuizAttempt; weakTopics: WeakTopic[] }>;
@@ -148,6 +152,9 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     audioDataArray: null,
     errorMessage: null,
     hasMicrophoneConsent: false,
+    quotaExhausted: false,
+    pendingChunksCount: 0,
+    quotaMessage: null,
   });
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -362,7 +369,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentLectureIdRef.current = lecture.id;
         liveDurationRef.current = 0;
 
-        const CHUNK_INTERVAL_MS = 25000; // 25-second chunks
+        const CHUNK_INTERVAL_MS = 45000; // 45-second target chunks to reduce API quota consumption
         let chunkStartTime = 0;
 
         const sendAudioChunk = (blob: Blob, seq: number, timestamp: number) => {
@@ -386,6 +393,21 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
                   }),
                 });
                 const data = await res.json();
+
+                if (data.isDailyQuotaExhausted || data.status === "quota_exhausted") {
+                  setLiveSession((prev) => ({
+                    ...prev,
+                    quotaExhausted: true,
+                    pendingChunksCount: typeof data.pendingCount === "number" ? data.pendingCount : prev.pendingChunksCount + 1,
+                    quotaMessage: data.message || "AI daily transcription quota has been reached. Your recording is safe.",
+                  }));
+                } else if (typeof data.pendingCount === "number") {
+                  setLiveSession((prev) => ({
+                    ...prev,
+                    pendingChunksCount: data.pendingCount,
+                  }));
+                }
+
                 if (data.newSegments && data.newSegments.length > 0) {
                   setActiveLecture((prev) => {
                     if (!prev || prev.id !== lectureId) return prev;
@@ -487,6 +509,9 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         audioDataArray: dataArray,
         errorMessage: null,
         hasMicrophoneConsent: true,
+        quotaExhausted: false,
+        pendingChunksCount: 0,
+        quotaMessage: null,
       });
 
       setActiveView("live");
@@ -638,10 +663,15 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state === "recording") {
+          try {
+            mediaRecorderRef.current.requestData();
+          } catch {}
           mediaRecorderRef.current.stop();
         }
       } catch (e) {}
     }
+    // Give final audio chunk time to serialize and send to server
+    await new Promise((r) => setTimeout(r, 400));
     if (liveSession.mediaStream) {
       liveSession.mediaStream.getTracks().forEach((track) => track.stop());
     }
@@ -810,6 +840,37 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const retryPendingTranscription = async (lectureId?: string) => {
+    const id = lectureId || activeLecture?.id;
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/lectures/${id}/transcription-jobs/retry`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+        credentials: "include",
+      });
+      if (res.ok) {
+        setLiveSession((prev) => ({
+          ...prev,
+          quotaExhausted: false,
+          quotaMessage: null,
+        }));
+        setTimeout(async () => {
+          const lRes = await fetch(`/api/lectures/${id}`, {
+            headers: getAuthHeaders(),
+            credentials: "include",
+          });
+          if (lRes.ok) {
+            const updated = await lRes.json();
+            setActiveLecture(updated);
+          }
+        }, 1500);
+      }
+    } catch (e) {
+      console.error("Retry transcription failed:", e);
+    }
+  };
+
   return (
     <LectureContext.Provider
       value={{
@@ -830,6 +891,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
         pauseLiveLecture,
         resumeLiveLecture,
         stopLiveLecture,
+        retryPendingTranscription,
         processLearningPack,
         askLectureQuestion,
         submitQuizAttempt,

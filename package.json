@@ -17,7 +17,8 @@
     "test:auth": "tsx scripts/test_auth_production.ts",
     "test:master": "tsx scripts/test_master_data.ts",
     "test:multilingual": "tsx scripts/test_multilingual_transcription.ts",
-    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts"
+    "test:quota": "tsx scripts/test_quota_and_job_queue.ts",
+    "test": "tsx scripts/test_sqlite_suite.ts && tsx scripts/test_user_isolation.ts && tsx scripts/test_transcription_suite.ts && tsx scripts/test_ai_orchestrator_suite.ts && tsx scripts/test_auth_production.ts && tsx scripts/test_master_data.ts && tsx scripts/test_multilingual_transcription.ts && tsx scripts/test_quota_and_job_queue.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

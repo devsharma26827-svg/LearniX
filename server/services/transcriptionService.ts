@@ -1,6 +1,7 @@
 import { getGeminiClient, MODELS } from "../geminiClient";
 import { TranscriptSegment } from "../../src/types";
 import { transcriptionScheduler } from "./geminiScheduler";
+import { transcriptionJobQueue } from "./transcriptionJobQueue";
 
 export interface TranscribeChunkOptions {
   audioBase64: string;
@@ -247,6 +248,24 @@ export async function transcribeAudioChunk(
     mimeType
   );
   console.log(`[TRANSCRIPTION] Audio validation successful (${byteLength} bytes, ${normalizedMime})`);
+
+  // Step 2: Use persistent SQLite job queue if userId is provided
+  if (userId && lectureId) {
+    try {
+      const result = await transcriptionJobQueue.enqueueChunk({
+        lectureId,
+        userId,
+        sequenceNumber: typeof sequenceNumber === "number" ? sequenceNumber : Math.round(currentTimestamp),
+        audioBase64: cleanBase64,
+        mimeType: normalizedMime,
+        currentTimestamp,
+        language,
+      });
+      return result.newSegments;
+    } catch (e: any) {
+      console.warn("[TRANSCRIPTION] Job queue processing error, falling back to direct scheduler:", e?.message || e);
+    }
+  }
 
   const ai = getGeminiClient();
 

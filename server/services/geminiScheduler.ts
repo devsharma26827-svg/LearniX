@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { aiOrchestrator } from "./aiOrchestrator";
 import { MODELS } from "../geminiClient";
+import { classifyAiError } from "./errorClassifier";
 
 export interface ScheduledTask<T> {
   id: string;
@@ -184,7 +185,10 @@ export class GeminiTranscriptionScheduler {
           console.warn(`[TRANSCRIPTION] Rate limit reached (429 RESOURCE_EXHAUSTED)`);
         }
 
-        if (errorInfo.isRetryable && task.retries < this.maxRetries) {
+        if (errorInfo.isDailyQuotaExhausted) {
+          console.warn(`[TRANSCRIPTION] Daily free-tier request quota exhausted. Pausing scheduler immediate retries.`);
+          task.reject(err);
+        } else if (errorInfo.isRetryable && task.retries < this.maxRetries) {
           task.retries += 1;
           const delayMs = this.computeBackoffDelay(task.retries, errorInfo.retryDelayMs);
           console.warn(
@@ -211,48 +215,17 @@ export class GeminiTranscriptionScheduler {
   public classifyError(err: any): {
     isRateLimited: boolean;
     isRetryable: boolean;
+    isDailyQuotaExhausted: boolean;
     retryDelayMs?: number;
     status: number;
   } {
-    const status = Number(err?.status || err?.statusCode || err?.code || 0);
-    const msg = String(err?.message || "").toLowerCase();
-
-    const is429 = status === 429 || msg.includes("resource_exhausted") || msg.includes("429") || msg.includes("quota");
-    const is5xx = status >= 500 && status <= 599 || msg.includes("unavailable") || msg.includes("high demand") || msg.includes("internal");
-    const isNonRetryable = status === 400 || status === 401 || status === 403 || status === 404 || msg.includes("invalid_argument");
-
-    let retryDelayMs: number | undefined;
-
-    // 1. Check Google RPC RetryInfo
-    const errorDetails = err?.errorDetails || err?.details;
-    if (Array.isArray(errorDetails)) {
-      const retryInfo = errorDetails.find((d: any) => d?.["@type"]?.includes("RetryInfo"));
-      if (retryInfo?.retryDelay) {
-        const delayStr = String(retryInfo.retryDelay).trim();
-        const secondsMatch = delayStr.match(/^([\d.]+)s?$/i);
-        if (secondsMatch) {
-          retryDelayMs = Math.round(parseFloat(secondsMatch[1]) * 1000);
-        }
-      }
-    }
-
-    // 2. Check retry-after header
-    const headers = err?.headers || err?.response?.headers;
-    const retryAfter = typeof headers?.get === "function" ? headers.get("retry-after") : headers?.["retry-after"];
-    if (retryAfter && !retryDelayMs) {
-      const parsedSec = parseFloat(retryAfter);
-      if (!isNaN(parsedSec)) {
-        retryDelayMs = Math.round(parsedSec * 1000);
-      }
-    }
-
-    const isRetryable = (is429 || is5xx) && !isNonRetryable;
-
+    const c = classifyAiError(err);
     return {
-      isRateLimited: is429,
-      isRetryable,
-      retryDelayMs,
-      status: status || (is429 ? 429 : is5xx ? 503 : 500),
+      isRateLimited: c.status === 429,
+      isRetryable: c.isRetryable,
+      isDailyQuotaExhausted: c.isDailyQuotaExhausted,
+      retryDelayMs: c.retryDelayMs,
+      status: c.status,
     };
   }
 

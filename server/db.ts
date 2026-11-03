@@ -12,6 +12,81 @@ const DEFAULT_USERS_FILE = path.join(DEFAULT_DATA_DIR, "users.json");
 
 export const DEFAULT_DEMO_PASSWORD = process.env.DEMO_STUDENT_PASSWORD || "DemoStudent@123";
 
+export type TranscriptionJobStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "COMPLETED"
+  | "RETRY_WAIT"
+  | "QUOTA_EXHAUSTED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface TranscriptionJob {
+  id: string;
+  userId: string;
+  lectureId: string;
+  sequenceNumber: number;
+  audioRef: string;
+  mimeType: string;
+  durationSeconds: number;
+  startTime: number;
+  endTime: number;
+  status: TranscriptionJobStatus;
+  attemptCount: number;
+  nextRetryAt: number;
+  lastErrorCode?: string | null;
+  lastErrorMessage?: string | null;
+  chunkHash?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function saveAudioChunkToDisk(
+  userId: string,
+  lectureId: string,
+  sequenceNumber: number,
+  audioBuffer: Buffer,
+  mimeType = "audio/webm"
+): string {
+  const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeLecture = lectureId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const ext = mimeType.includes("wav") ? "wav" : mimeType.includes("mp3") || mimeType.includes("mpeg") ? "mp3" : "webm";
+  const dir = path.join(DEFAULT_DATA_DIR, "audio_chunks", safeUser, safeLecture);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const filename = `chunk_${String(sequenceNumber).padStart(5, "0")}.${ext}`;
+  const fullPath = path.join(dir, filename);
+  fs.writeFileSync(fullPath, audioBuffer);
+  return path.join("audio_chunks", safeUser, safeLecture, filename).replace(/\\/g, "/");
+}
+
+export function readAudioChunkFromDisk(audioRef: string): Buffer | null {
+  try {
+    const fullPath = path.isAbsolute(audioRef) ? audioRef : path.join(DEFAULT_DATA_DIR, audioRef);
+    if (fs.existsSync(fullPath)) {
+      return fs.readFileSync(fullPath);
+    }
+    return null;
+  } catch (e) {
+    console.error("[Database] Failed to read audio chunk from disk:", e);
+    return null;
+  }
+}
+
+export function deleteLectureAudioChunks(userId: string, lectureId: string): void {
+  try {
+    const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const safeLecture = lectureId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const dir = path.join(DEFAULT_DATA_DIR, "audio_chunks", safeUser, safeLecture);
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error("[Database] Failed to delete audio chunks folder:", e);
+  }
+}
+
 export function getDatabasePath(): string {
   const envPath = process.env.SQLITE_DB_PATH?.trim();
   if (envPath) {
@@ -91,6 +166,17 @@ export class Database {
   private stmtInsertChunkRecord!: Statement;
   private stmtGetChunkRecord!: Statement;
 
+  // Prepared statements for Transcription Jobs
+  private stmtInsertTranscriptionJob!: Statement;
+  private stmtGetTranscriptionJobById!: Statement;
+  private stmtGetTranscriptionJobsByLecture!: Statement;
+  private stmtGetPendingJobs!: Statement;
+  private stmtGetPendingJobCountForLecture!: Statement;
+  private stmtUpdateJobStatus!: Statement;
+  private stmtRecoverInterruptedJobs!: Statement;
+  private stmtResetJobsForLecture!: Statement;
+  private stmtDeleteLectureJobs!: Statement;
+
   constructor(customPath?: string, customUsersFile?: string) {
     this.dbPath = customPath || getDatabasePath();
     this.usersFile = customUsersFile || DEFAULT_USERS_FILE;
@@ -122,6 +208,7 @@ export class Database {
 
     this.runMigrations();
     this.prepareStatements();
+    this.recoverInterruptedJobs();
     this.seedMasterDataIfEmpty();
     this.seedMissingSamples();
     this.migrateLegacyUsers();
@@ -308,6 +395,37 @@ export class Database {
           CREATE INDEX IF NOT EXISTS idx_chunks_lecture ON transcription_chunks(lecture_id);
         `);
       });
+
+      // Migration 6: Persistent Transcription Jobs Queue
+      this.applyMigration("006_transcription_jobs", () => {
+        this.sqlite.exec(`
+          CREATE TABLE IF NOT EXISTS transcription_jobs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            lecture_id TEXT NOT NULL,
+            sequence_number INTEGER NOT NULL,
+            audio_ref TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            duration_seconds REAL DEFAULT 0,
+            start_time REAL DEFAULT 0,
+            end_time REAL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_retry_at INTEGER DEFAULT 0,
+            last_error_code TEXT,
+            last_error_message TEXT,
+            chunk_hash TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(lecture_id, sequence_number)
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_transcription_jobs_user ON transcription_jobs(user_id);
+          CREATE INDEX IF NOT EXISTS idx_transcription_jobs_lecture ON transcription_jobs(lecture_id);
+          CREATE INDEX IF NOT EXISTS idx_transcription_jobs_status ON transcription_jobs(status);
+          CREATE INDEX IF NOT EXISTS idx_transcription_jobs_pending ON transcription_jobs(status, next_retry_at);
+        `);
+      });
     } catch (err) {
       console.error("[Database Error] Migration failure:", err);
       throw err;
@@ -466,6 +584,66 @@ export class Database {
         VALUES (@id, @lecture_id, @sequence_number, @chunk_hash, @status, @created_at)
       `);
       this.stmtGetChunkRecord = this.sqlite.prepare("SELECT * FROM transcription_chunks WHERE lecture_id = ? AND sequence_number = ?");
+
+      // Transcription Jobs
+      this.stmtInsertTranscriptionJob = this.sqlite.prepare(`
+        INSERT INTO transcription_jobs (
+          id, user_id, lecture_id, sequence_number, audio_ref, mime_type,
+          duration_seconds, start_time, end_time, status, attempt_count,
+          next_retry_at, last_error_code, last_error_message, chunk_hash,
+          created_at, updated_at
+        ) VALUES (
+          @id, @user_id, @lecture_id, @sequence_number, @audio_ref, @mime_type,
+          @duration_seconds, @start_time, @end_time, @status, @attempt_count,
+          @next_retry_at, @last_error_code, @last_error_message, @chunk_hash,
+          @created_at, @updated_at
+        )
+        ON CONFLICT(lecture_id, sequence_number) DO UPDATE SET
+          audio_ref = excluded.audio_ref,
+          mime_type = excluded.mime_type,
+          chunk_hash = excluded.chunk_hash,
+          status = CASE WHEN transcription_jobs.status = 'COMPLETED' THEN 'COMPLETED' ELSE excluded.status END,
+          updated_at = excluded.updated_at
+      `);
+
+      this.stmtGetTranscriptionJobById = this.sqlite.prepare(
+        "SELECT * FROM transcription_jobs WHERE id = ?"
+      );
+
+      this.stmtGetTranscriptionJobsByLecture = this.sqlite.prepare(
+        "SELECT * FROM transcription_jobs WHERE lecture_id = ? AND user_id = ? ORDER BY sequence_number ASC"
+      );
+
+      this.stmtGetPendingJobs = this.sqlite.prepare(
+        "SELECT * FROM transcription_jobs WHERE status IN ('PENDING', 'RETRY_WAIT') AND next_retry_at <= ? ORDER BY sequence_number ASC LIMIT ?"
+      );
+
+      this.stmtGetPendingJobCountForLecture = this.sqlite.prepare(
+        "SELECT COUNT(*) as count FROM transcription_jobs WHERE lecture_id = ? AND user_id = ? AND status IN ('PENDING', 'RETRY_WAIT', 'PROCESSING', 'QUOTA_EXHAUSTED')"
+      );
+
+      this.stmtUpdateJobStatus = this.sqlite.prepare(`
+        UPDATE transcription_jobs SET
+          status = @status,
+          attempt_count = @attempt_count,
+          next_retry_at = @next_retry_at,
+          last_error_code = @last_error_code,
+          last_error_message = @last_error_message,
+          updated_at = @updated_at
+        WHERE id = @id
+      `);
+
+      this.stmtRecoverInterruptedJobs = this.sqlite.prepare(
+        "UPDATE transcription_jobs SET status = 'RETRY_WAIT', updated_at = ? WHERE status = 'PROCESSING'"
+      );
+
+      this.stmtResetJobsForLecture = this.sqlite.prepare(
+        "UPDATE transcription_jobs SET status = 'PENDING', attempt_count = 0, next_retry_at = 0, updated_at = ? WHERE lecture_id = ? AND user_id = ? AND status IN ('QUOTA_EXHAUSTED', 'FAILED', 'RETRY_WAIT')"
+      );
+
+      this.stmtDeleteLectureJobs = this.sqlite.prepare(
+        "DELETE FROM transcription_jobs WHERE lecture_id = ?"
+      );
     } catch (err) {
       console.error("[Database Error] Failed to prepare SQL statements:", err);
       throw err;
@@ -1354,6 +1532,183 @@ export class Database {
   }
 
   // =========================================================================
+  // TRANSCRIPTION JOB METHODS
+  // =========================================================================
+
+  public createTranscriptionJob(
+    job: Omit<TranscriptionJob, "id" | "createdAt" | "updatedAt" | "attemptCount" | "nextRetryAt"> & {
+      id?: string;
+      attemptCount?: number;
+      nextRetryAt?: number;
+    }
+  ): TranscriptionJob {
+    const id = job.id || `job-${job.lectureId}-${job.sequenceNumber}`;
+    const now = new Date().toISOString();
+    const fullJob: TranscriptionJob = {
+      id,
+      userId: job.userId,
+      lectureId: job.lectureId,
+      sequenceNumber: job.sequenceNumber,
+      audioRef: job.audioRef,
+      mimeType: job.mimeType,
+      durationSeconds: job.durationSeconds || 0,
+      startTime: job.startTime || 0,
+      endTime: job.endTime || 0,
+      status: job.status || "PENDING",
+      attemptCount: job.attemptCount || 0,
+      nextRetryAt: job.nextRetryAt || 0,
+      lastErrorCode: job.lastErrorCode || null,
+      lastErrorMessage: job.lastErrorMessage || null,
+      chunkHash: job.chunkHash || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      this.stmtInsertTranscriptionJob.run({
+        id: fullJob.id,
+        user_id: fullJob.userId,
+        lecture_id: fullJob.lectureId,
+        sequence_number: fullJob.sequenceNumber,
+        audio_ref: fullJob.audioRef,
+        mime_type: fullJob.mimeType,
+        duration_seconds: fullJob.durationSeconds,
+        start_time: fullJob.startTime,
+        end_time: fullJob.endTime,
+        status: fullJob.status,
+        attempt_count: fullJob.attemptCount,
+        next_retry_at: fullJob.nextRetryAt,
+        last_error_code: fullJob.lastErrorCode,
+        last_error_message: fullJob.lastErrorMessage,
+        chunk_hash: fullJob.chunkHash,
+        created_at: fullJob.createdAt,
+        updated_at: fullJob.updatedAt,
+      });
+      return fullJob;
+    } catch (err) {
+      console.error("[Database Error] createTranscriptionJob failed:", err);
+      throw err;
+    }
+  }
+
+  public getTranscriptionJobById(id: string): TranscriptionJob | null {
+    try {
+      const row = this.stmtGetTranscriptionJobById.get(id) as any;
+      if (!row) return null;
+      return this.mapTranscriptionJobRow(row);
+    } catch (err) {
+      console.error("[Database Error] getTranscriptionJobById failed:", err);
+      return null;
+    }
+  }
+
+  public getTranscriptionJobsByLecture(lectureId: string, userId: string): TranscriptionJob[] {
+    try {
+      const rows = this.stmtGetTranscriptionJobsByLecture.all(lectureId, userId) as any[];
+      return rows.map((r) => this.mapTranscriptionJobRow(r));
+    } catch (err) {
+      console.error("[Database Error] getTranscriptionJobsByLecture failed:", err);
+      return [];
+    }
+  }
+
+  public getPendingTranscriptionJobs(limit = 10): TranscriptionJob[] {
+    try {
+      const now = Date.now();
+      const rows = this.stmtGetPendingJobs.all(now, limit) as any[];
+      return rows.map((r) => this.mapTranscriptionJobRow(r));
+    } catch (err) {
+      console.error("[Database Error] getPendingTranscriptionJobs failed:", err);
+      return [];
+    }
+  }
+
+  public getPendingJobCountForLecture(lectureId: string, userId: string): number {
+    try {
+      const res = this.stmtGetPendingJobCountForLecture.get(lectureId, userId) as { count: number };
+      return res?.count || 0;
+    } catch (err) {
+      console.error("[Database Error] getPendingJobCountForLecture failed:", err);
+      return 0;
+    }
+  }
+
+  public updateTranscriptionJobStatus(
+    id: string,
+    updates: {
+      status: TranscriptionJobStatus;
+      attemptCount?: number;
+      nextRetryAt?: number;
+      lastErrorCode?: string | null;
+      lastErrorMessage?: string | null;
+    }
+  ): void {
+    try {
+      const existing = this.getTranscriptionJobById(id);
+      if (!existing) return;
+      const now = new Date().toISOString();
+      this.stmtUpdateJobStatus.run({
+        id,
+        status: updates.status,
+        attempt_count: typeof updates.attemptCount === "number" ? updates.attemptCount : existing.attemptCount,
+        next_retry_at: typeof updates.nextRetryAt === "number" ? updates.nextRetryAt : existing.nextRetryAt,
+        last_error_code: updates.lastErrorCode !== undefined ? updates.lastErrorCode : existing.lastErrorCode || null,
+        last_error_message: updates.lastErrorMessage !== undefined ? updates.lastErrorMessage : existing.lastErrorMessage || null,
+        updated_at: now,
+      });
+    } catch (err) {
+      console.error("[Database Error] updateTranscriptionJobStatus failed:", err);
+    }
+  }
+
+  public recoverInterruptedJobs(): number {
+    try {
+      const now = new Date().toISOString();
+      const res = this.stmtRecoverInterruptedJobs.run(now);
+      if (res.changes > 0) {
+        console.log(`[Database] Recovered ${res.changes} interrupted transcription jobs from PROCESSING to RETRY_WAIT`);
+      }
+      return res.changes;
+    } catch (err) {
+      console.error("[Database Error] recoverInterruptedJobs failed:", err);
+      return 0;
+    }
+  }
+
+  public resetJobsForLecture(lectureId: string, userId: string): number {
+    try {
+      const now = new Date().toISOString();
+      const res = this.stmtResetJobsForLecture.run(now, lectureId, userId);
+      return res.changes;
+    } catch (err) {
+      console.error("[Database Error] resetJobsForLecture failed:", err);
+      return 0;
+    }
+  }
+
+  private mapTranscriptionJobRow(row: any): TranscriptionJob {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      lectureId: row.lecture_id,
+      sequenceNumber: row.sequence_number,
+      audioRef: row.audio_ref,
+      mimeType: row.mime_type,
+      durationSeconds: row.duration_seconds,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      status: row.status as TranscriptionJobStatus,
+      attemptCount: row.attempt_count,
+      nextRetryAt: row.next_retry_at,
+      lastErrorCode: row.last_error_code,
+      lastErrorMessage: row.last_error_message,
+      chunkHash: row.chunk_hash,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // =========================================================================
   // LECTURE METHODS
   // =========================================================================
 
@@ -1439,6 +1794,11 @@ export class Database {
   public deleteLecture(id: string): boolean {
     if (!id) return false;
     try {
+      const lecture = this.getLectureById(id);
+      if (lecture) {
+        deleteLectureAudioChunks(lecture.createdBy, lecture.id);
+      }
+      this.stmtDeleteLectureJobs.run(id);
       const info = this.stmtDeleteLecture.run(id);
       return info.changes > 0;
     } catch (err) {

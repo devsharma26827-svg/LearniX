@@ -13,6 +13,8 @@ import {
   PanelRightOpen,
   Mic,
   Volume2,
+  ShieldCheck,
+  RotateCcw,
 } from "lucide-react";
 import { useLecture } from "../../context/LectureContext";
 import { APP_NAME } from "../../config/branding";
@@ -26,6 +28,7 @@ export const LiveLectureWorkspace: React.FC = () => {
     pauseLiveLecture,
     resumeLiveLecture,
     stopLiveLecture,
+    retryPendingTranscription,
   } = useLecture();
 
   const [showInsights, setShowInsights] = useState(true);
@@ -43,19 +46,31 @@ export const LiveLectureWorkspace: React.FC = () => {
       {/* 1. TOP STATUS & META BAR */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 bg-white dark:bg-[#1B2421] border-b border-[#E4EAE7] dark:border-[#2C3B36] shrink-0">
         <div className="flex items-center space-x-3 truncate">
-          {/* Status badge with green pulsing dot */}
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[#E7F6F1] dark:bg-[#1E3730] border border-[#168A72]/20 text-xs font-semibold text-[#0F6B59] dark:text-[#23A98D]">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                liveSession.isPaused
-                  ? "bg-[#9BA4A0]"
-                  : "bg-[#168A72] animate-ping"
-              }`}
-            />
-            <span>
-              {liveSession.isPaused ? "Recording Paused" : "Live Recording"}
-            </span>
-          </div>
+          {/* Status badge with green pulsing dot or safe recording quota notice */}
+          {liveSession.quotaExhausted ? (
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/50 text-xs font-semibold text-amber-800 dark:text-amber-300">
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <span>Recording Safe (AI Quota Paused)</span>
+              {liveSession.pendingChunksCount > 0 && (
+                <span className="ml-1 px-1.5 py-0.2 bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-amber-100 rounded-full text-[10px]">
+                  {liveSession.pendingChunksCount} saved
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[#E7F6F1] dark:bg-[#1E3730] border border-[#168A72]/20 text-xs font-semibold text-[#0F6B59] dark:text-[#23A98D]">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  liveSession.isPaused
+                    ? "bg-[#9BA4A0]"
+                    : "bg-[#168A72] animate-ping"
+                }`}
+              />
+              <span>
+                {liveSession.isPaused ? "Recording Paused" : "Live Recording"}
+              </span>
+            </div>
+          )}
 
           <span className="text-[#E4EAE7] dark:text-[#2C3B36] hidden sm:inline">|</span>
 
@@ -92,6 +107,25 @@ export const LiveLectureWorkspace: React.FC = () => {
         <div className="bg-[#FDF0ED] dark:bg-[#38241D] border-b border-[#E07A5F]/30 p-2.5 px-6 flex items-center gap-2 text-xs text-[#E07A5F]">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{liveSession.errorMessage}</span>
+        </div>
+      )}
+
+      {/* Quota Exhaustion Safe Recording Notice */}
+      {liveSession.quotaExhausted && (
+        <div className="bg-amber-50/95 dark:bg-[#252016]/95 border-b border-amber-200 dark:border-amber-800/40 px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200 shadow-xs">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              <strong>Audio Safe & Stored:</strong> AI daily transcription quota reached. Audio is securely preserved on disk and will be transcribed automatically, or you can retry now.
+            </span>
+          </div>
+          <button
+            onClick={() => retryPendingTranscription()}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-200/80 hover:bg-amber-300 dark:bg-amber-800/60 dark:hover:bg-amber-700 text-amber-900 dark:text-amber-100 font-semibold transition shrink-0 ml-auto"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Retry AI Transcription</span>
+          </button>
         </div>
       )}
 

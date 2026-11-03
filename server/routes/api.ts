@@ -3,6 +3,7 @@ import multer from "multer";
 import { db } from "../db";
 import { Lecture, TranscriptSegment, User, Teacher, Subject, Topic } from "../../src/types";
 import { transcribeAudioChunk } from "../services/transcriptionService";
+import { transcriptionJobQueue } from "../services/transcriptionJobQueue";
 import { processLectureTranscript } from "../services/aiUnderstandingService";
 import { askTheLecture, searchLectureContent } from "../services/ragService";
 import { generateQuizForLecture } from "../services/quizService";
@@ -658,6 +659,8 @@ router.post("/lectures/reset-sample", (req: Request, res: Response) => {
 // ----------------------------------------------------
 // LIVE AUDIO TRANSCRIPTION & STREAMING
 // ----------------------------------------------------
+// LIVE TRANSCRIPTION & CHUNK PROCESSING (DURABLE & QUOTA-AWARE)
+// ----------------------------------------------------
 router.post("/lectures/:id/transcribe-chunk", async (req: Request, res: Response) => {
   const auth = requireLectureOwnership(req, res, req.params.id);
   if (!auth) return;
@@ -677,31 +680,51 @@ router.post("/lectures/:id/transcribe-chunk", async (req: Request, res: Response
   }
 
   try {
-    const existingContext = lecture.transcript.slice(-3).map((t) => t.text).join(" ");
-    const segments = await transcribeAudioChunk({
+    const seq = typeof sequenceNumber === "number" ? sequenceNumber : Math.round(Number(currentTimestamp) || 0);
+
+    const result = await transcriptionJobQueue.enqueueChunk({
+      lectureId: lecture.id,
+      userId: user.id,
+      sequenceNumber: seq,
       audioBase64,
       mimeType,
       currentTimestamp: Number(currentTimestamp) || 0,
-      existingContext,
-      lectureId: lecture.id,
-      userId: user.id,
-      sequenceNumber: typeof sequenceNumber === "number" ? sequenceNumber : undefined,
-      fallbackText: typeof fallbackText === "string" ? fallbackText : undefined,
       language: typeof language === "string" ? language : lecture.language || "auto",
     });
 
-    if (segments.length > 0) {
-      lecture.transcript.push(...segments);
-      const latestEnd = Math.max(...segments.map((s) => s.endTime));
-      lecture.duration = Math.max(lecture.duration, latestEnd);
-      db.saveLecture(lecture);
+    // If client offline speech fallback was provided and no AI segments were returned
+    if (result.newSegments.length === 0 && fallbackText && typeof fallbackText === "string" && fallbackText.trim().length > 0) {
+      const fallbackSegment: TranscriptSegment = {
+        id: `seg-fallback-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        startTime: Math.round(Number(currentTimestamp) || 0),
+        endTime: Math.round((Number(currentTimestamp) || 0) + 5),
+        text: fallbackText.trim(),
+        topic: "Live Lecture",
+        detectedLanguage: typeof language === "string" && language !== "auto" ? language : undefined,
+        isImportant: false,
+      };
+
+      const freshLecture = db.getLectureById(lecture.id) || lecture;
+      const alreadyPresent = freshLecture.transcript.some((s) => s.text.trim().toLowerCase() === fallbackSegment.text.toLowerCase());
+      if (!alreadyPresent) {
+        freshLecture.transcript.push(fallbackSegment);
+        freshLecture.duration = Math.max(freshLecture.duration, fallbackSegment.endTime);
+        db.saveLecture(freshLecture);
+        result.newSegments.push(fallbackSegment);
+      }
     }
 
+    const updatedLecture = db.getLectureById(lecture.id) || lecture;
+
     res.json({
-      newSegments: segments,
-      totalSegments: lecture.transcript.length,
-      currentDuration: lecture.duration,
-      status: segments.length > 0 ? "transcribed" : "silence",
+      jobId: result.jobId,
+      newSegments: result.newSegments,
+      totalSegments: updatedLecture.transcript.length,
+      currentDuration: updatedLecture.duration,
+      status: result.status,
+      pendingCount: result.pendingCount,
+      isDailyQuotaExhausted: result.isDailyQuotaExhausted || false,
+      message: result.message,
     });
   } catch (err: any) {
     console.error("Transcribe chunk error:", err?.message || err);
@@ -712,6 +735,20 @@ router.post("/lectures/:id/transcribe-chunk", async (req: Request, res: Response
       details: err.details || err.message,
     });
   }
+});
+
+router.get("/lectures/:id/transcription-jobs", (req: Request, res: Response) => {
+  const auth = requireLectureOwnership(req, res, req.params.id);
+  if (!auth) return;
+  const summary = transcriptionJobQueue.getLectureJobSummary(auth.lecture.id, auth.user.id);
+  res.json(summary);
+});
+
+router.post("/lectures/:id/transcription-jobs/retry", async (req: Request, res: Response) => {
+  const auth = requireLectureOwnership(req, res, req.params.id);
+  if (!auth) return;
+  const result = await transcriptionJobQueue.retryLectureJobs(auth.lecture.id, auth.user.id);
+  res.json({ success: true, ...result });
 });
 
 router.post("/lectures/:id/append-transcript", (req: Request, res: Response) => {
