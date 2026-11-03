@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { User, NotificationPreferences } from "../types";
+import { apiFetch, bootstrapCsrf, setCsrfToken } from "../services/apiClient";
 
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   quizReminders: true,
@@ -29,6 +30,7 @@ interface AuthContextType {
   authUser: User | null;
   profile: User | null;
   isAuthenticated: boolean;
+  demoEnabled: boolean;
   login: (email: string, password?: string) => Promise<void>;
   register: (name: string, email: string, password?: string, additional?: Partial<User>) => Promise<void>;
   updateProfile: (updates: Partial<User>) => Promise<User>;
@@ -133,6 +135,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [demoEnabled, setDemoEnabled] = useState(true);
 
   const getAuthHeaders = useCallback((currentUser: User | null) => {
     const token = localStorage.getItem("learnix_token") || "";
@@ -155,7 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshProfile = useCallback(async () => {
     try {
-      const res = await fetch("/api/me", {
+      const res = await apiFetch("/api/me", {
         method: "GET",
         headers: getAuthHeaders(user),
         credentials: "include",
@@ -178,8 +181,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [user?.id, user?.email, getAuthHeaders]);
 
-  // Sync profile from backend on initial mount
+  // Sync CSRF bootstrap and profile from backend on initial mount
   useEffect(() => {
+    bootstrapCsrf().then((res) => {
+      if (res) {
+        setDemoEnabled(res.demoEnabled);
+        if (res.csrfToken) {
+          setCsrfToken(res.csrfToken);
+        }
+      }
+    });
     refreshProfile();
   }, []);
 
@@ -189,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const effectivePassword = password || (normalizedEmail === "alex.student@learnix.ai" ? "DemoStudent@123" : "");
 
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await apiFetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -200,12 +211,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.token) {
           localStorage.setItem("learnix_token", data.token);
         }
+        if (data.csrfToken) {
+          setCsrfToken(data.csrfToken);
+        }
         const normalized = normalizeStoredUser(data.user);
         if (normalized) {
           setUser(normalized);
         }
       } else {
-        throw new Error(data.error || "Login failed");
+        throw new Error(data.message || data.error || "Login failed");
       }
     } finally {
       setIsLoading(false);
@@ -224,7 +238,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const effectivePassword = password || "DemoStudent@123";
 
     try {
-      const res = await fetch("/api/auth/register", {
+      const res = await apiFetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -240,12 +254,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.token) {
           localStorage.setItem("learnix_token", data.token);
         }
+        if (data.csrfToken) {
+          setCsrfToken(data.csrfToken);
+        }
         const normalized = normalizeStoredUser(data.user);
         if (normalized) {
           setUser(normalized);
         }
       } else {
-        throw new Error(data.error || "Registration failed");
+        throw new Error(data.message || data.error || "Registration failed");
       }
     } finally {
       setIsLoading(false);
@@ -257,7 +274,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error("You must be signed in to update your profile.");
     }
 
-    const res = await fetch("/api/me", {
+    const res = await apiFetch("/api/me", {
       method: "PATCH",
       headers: getAuthHeaders(user),
       credentials: "include",
@@ -266,7 +283,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || "Unable to update profile. Please try again.");
+      throw new Error(errData.message || errData.error || "Unable to update profile. Please try again.");
     }
 
     const data = await res.json();
@@ -281,7 +298,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const deleteAccount = async (): Promise<void> => {
     if (!user) return;
-    const res = await fetch("/api/me", {
+    const res = await apiFetch("/api/me", {
       method: "DELETE",
       headers: getAuthHeaders(user),
       credentials: "include",
@@ -294,11 +311,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async (): Promise<void> => {
     try {
-      await fetch("/api/auth/logout", {
+      const res = await apiFetch("/api/auth/logout", {
         method: "POST",
         headers: getAuthHeaders(user),
         credentials: "include",
       });
+      const data = await res.json().catch(() => ({}));
+      if (data?.csrfToken) {
+        setCsrfToken(data.csrfToken);
+      }
     } catch (e) {
       console.warn("Logout request failed:", e);
     } finally {
@@ -316,6 +337,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authUser: user,
         profile: user,
         isAuthenticated: Boolean(user),
+        demoEnabled,
         login,
         register,
         updateProfile,

@@ -46,6 +46,7 @@ export interface TranscriptSegment {
   text: string;
   topic?: string;
   speaker?: string;
+  language?: string;
   detectedLanguage?: string;
   languageCode?: string;
   isImportant?: boolean;
@@ -212,7 +213,7 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-export type LectureStatus = "idle" | "recording" | "processing" | "ready" | "failed";
+export type LectureStatus = "idle" | "recording" | "processing" | "ready" | "failed" | "completed";
 export type LectureSource = "live" | "upload" | "sample";
 
 export interface ProcessingProgress {

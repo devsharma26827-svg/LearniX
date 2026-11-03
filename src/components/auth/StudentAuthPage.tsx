@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import {
   Mail,
@@ -24,14 +24,22 @@ interface StudentAuthPageProps {
 export const StudentAuthPage: React.FC<StudentAuthPageProps> = ({ mode }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, register, isLoading } = useAuth();
+  const { login, register, isLoading, demoEnabled } = useAuth();
 
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(mode === "login" ? "alex.student@learnix.ai" : "");
-  const [password, setPassword] = useState(mode === "login" ? "DemoStudent@123" : "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // If in demo mode and email is empty on login screen, offer one-click demo prefill via button
+  useEffect(() => {
+    if (demoEnabled && mode === "login" && !email) {
+      setEmail("alex.student@learnix.ai");
+      setPassword("DemoStudent@123");
+    }
+  }, [demoEnabled, mode]);
 
   const fromPath = (location.state as any)?.from?.pathname;
   const redirectTarget =
@@ -300,17 +308,19 @@ export const StudentAuthPage: React.FC<StudentAuthPageProps> = ({ mode }) => {
                 </button>
               </form>
 
-              {/* Quick Demo Access */}
+              {/* Quick Demo Access (strictly disabled in production) */}
               <div className="pt-3 border-t border-[#E4EAE7] dark:border-[#2C3B36] space-y-3">
-                <button
-                  type="button"
-                  onClick={handleQuickDemoLogin}
-                  disabled={isLoading}
-                  className="w-full py-2 px-3.5 rounded-xl border border-[#E4EAE7] dark:border-[#2C3B36] bg-[#F8FAF8] dark:bg-[#17201D] hover:border-[#168A72]/40 text-xs font-medium text-[#17201D] dark:text-[#F1FAF7] transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-[#168A72]" />
-                  <span>Continue with Demo Account (Alex Dev)</span>
-                </button>
+                {demoEnabled && (
+                  <button
+                    type="button"
+                    onClick={handleQuickDemoLogin}
+                    disabled={isLoading}
+                    className="w-full py-2 px-3.5 rounded-xl border border-[#E4EAE7] dark:border-[#2C3B36] bg-[#F8FAF8] dark:bg-[#17201D] hover:border-[#168A72]/40 text-xs font-medium text-[#17201D] dark:text-[#F1FAF7] transition flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#168A72]" />
+                    <span>Continue with Demo Account (Alex Dev)</span>
+                  </button>
+                )}
 
                 <p className="text-center text-xs text-[#66736E] dark:text-[#9BA4A0]">
                   {mode === "login" ? (

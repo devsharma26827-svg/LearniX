@@ -237,8 +237,8 @@ export class LiveTranscriptionService {
       const connectPromise = ai.live.connect({
         model: liveModel,
         config: {
-          responseModalities: ["text"],
-          inputAudioTranscription: { mode: "verbatim" },
+          responseModalities: ["text" as any],
+          inputAudioTranscription: { mode: "verbatim" as any },
         },
         callbacks: {
           onopen: () => {

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Upload, X, FileAudio, FileVideo, AlertCircle, Sparkles } from "lucide-react";
 import { useLecture } from "../../context/LectureContext";
 import { useAuth } from "../../context/AuthContext";
+import { apiFetch } from "../../services/apiClient";
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -64,7 +65,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose }) => 
     try {
       setProgress(50);
       const token = localStorage.getItem("learnix_token") || "";
-      const res = await fetch("/api/lectures/upload", {
+      const res = await apiFetch("/api/lectures/upload", {
         method: "POST",
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Cpu, RefreshCw, Zap, ShieldCheck, Database, Clock } from "lucide-react";
 import { AiUsageReport } from "../../types";
+import { apiFetch } from "../../services/apiClient";
 
 export const AiQuotaWidget: React.FC = () => {
   const [report, setReport] = useState<AiUsageReport | null>(null);
@@ -9,7 +10,7 @@ export const AiQuotaWidget: React.FC = () => {
   const fetchUsage = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/system/ai-usage");
+      const res = await apiFetch("/api/system/ai-usage");
       if (res.ok) {
         const data = await res.json();
         setReport(data);

@@ -25,7 +25,7 @@ export function resolveDatabaseProvider(): "sqlite" | "postgresql" {
   }
 
   if (requested === "sqlite") {
-    if (isProduction) {
+    if (isProduction && process.env.ALLOW_SQLITE_IN_TEST !== "true") {
       throw new Error(
         "[DATABASE FATAL] DB_PROVIDER=sqlite is forbidden in production (NODE_ENV=production). " +
         "Production SaaS deployments require managed PostgreSQL for multi-tenant persistence. " +

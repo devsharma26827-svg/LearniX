@@ -17,6 +17,7 @@ import {
 import { useLecture } from "../../context/LectureContext";
 import { APP_NAME } from "../../config/branding";
 import { Teacher, Subject, Topic, StudentAcademicContext } from "../../types";
+import { apiFetch } from "../../services/apiClient";
 
 interface StartLiveModalProps {
   isOpen: boolean;
@@ -104,7 +105,7 @@ export const StartLiveModal: React.FC<StartLiveModalProps> = ({ isOpen, onClose 
 
     const loadStudentContext = async () => {
       try {
-        const res = await fetch("/api/academic/student-context", {
+        const res = await apiFetch("/api/academic/student-context", {
           headers: getAuthHeaders(),
           credentials: "include",
         });
@@ -121,7 +122,7 @@ export const StartLiveModal: React.FC<StartLiveModalProps> = ({ isOpen, onClose 
           }
         } else {
           // Fallback to general teachers if academic context endpoint is not yet seeded
-          const fallbackRes = await fetch("/api/master/teachers", {
+          const fallbackRes = await apiFetch("/api/master/teachers", {
             headers: getAuthHeaders(),
             credentials: "include",
           });
@@ -155,7 +156,7 @@ export const StartLiveModal: React.FC<StartLiveModalProps> = ({ isOpen, onClose 
     setIsLoadingSubjects(true);
     const loadTeacherSubjects = async () => {
       try {
-        const res = await fetch(`/api/academic/subjects?teacherId=${selectedTeacherId}`, {
+        const res = await apiFetch(`/api/academic/subjects?teacherId=${selectedTeacherId}`, {
           headers: getAuthHeaders(),
           credentials: "include",
         });
@@ -211,7 +212,7 @@ export const StartLiveModal: React.FC<StartLiveModalProps> = ({ isOpen, onClose 
     setIsLoadingTopics(true);
     const loadSubjectTopics = async () => {
       try {
-        const res = await fetch(`/api/academic/topics?subjectId=${selectedSubjectId}`, {
+        const res = await apiFetch(`/api/academic/topics?subjectId=${selectedSubjectId}`, {
           headers: getAuthHeaders(),
           credentials: "include",
         });

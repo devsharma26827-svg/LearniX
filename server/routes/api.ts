@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import crypto from "crypto";
 import multer from "multer";
 import { db } from "../db";
 import { Lecture, TranscriptSegment, User, Teacher, Subject, Topic } from "../../src/types";
@@ -10,11 +11,20 @@ import { generateQuizForLecture } from "../services/quizService";
 import { evaluateQuizAndDetectWeakTopics } from "../services/weakTopicService";
 import { aiOrchestrator } from "../services/aiOrchestrator";
 import { storageProvider } from "../services/storageProvider";
+import {
+  csrfProtectionMiddleware,
+  handleCsrfBootstrap,
+  generateCsrfToken,
+  AUTH_COOKIE_NAME,
+  PREAUTH_COOKIE_NAME,
+  getCsrfCookieOptions,
+  isDemoAccountEnabled,
+} from "../middleware/csrf";
 
 const router = express.Router();
 const upload = multer({ limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
 
-const COOKIE_NAME = "learnix_session";
+const COOKIE_NAME = AUTH_COOKIE_NAME;
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
@@ -24,23 +34,13 @@ const COOKIE_OPTIONS = {
 };
 
 // ----------------------------------------------------
-// CSRF PROTECTION MIDDLEWARE
+// CSRF TOKEN BOOTSTRAP & PROTECTION MIDDLEWARE
 // ----------------------------------------------------
-router.use((req: Request, res: Response, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  const authHeader = req.headers.authorization || "";
-  if (authHeader.startsWith("Bearer ")) return next();
+// GET /api/auth/csrf establishes context and returns CSRF token
+router.get("/auth/csrf", handleCsrfBootstrap);
 
-  // If session authenticates via HttpOnly cookie in production:
-  const cookieToken = req.cookies?.[COOKIE_NAME];
-  if (cookieToken && process.env.NODE_ENV === "production") {
-    const csrfHeader = req.headers["x-csrf-token"] || req.headers["x-requested-with"];
-    if (!csrfHeader) {
-      return res.status(403).json({ error: "CSRF verification failed: Missing required security header." });
-    }
-  }
-  next();
-});
+// Enforce CSRF protection on all mutating endpoints
+router.use(csrfProtectionMiddleware);
 
 // ----------------------------------------------------
 // RATE LIMITING FOR AUTHENTICATION
@@ -186,12 +186,19 @@ router.post("/auth/register", (req: Request, res: Response) => {
       password
     );
 
+    // Destroy anonymous pre-auth context and establish secure session (prevent session fixation)
+    res.clearCookie(PREAUTH_COOKIE_NAME, { path: "/" });
     const session = db.createSession(newUser.id, req.headers["user-agent"], req.ip);
     res.cookie(COOKIE_NAME, session.token, COOKIE_OPTIONS);
+
+    // Rotate CSRF token bound to authenticated session
+    const rotatedCsrfToken = generateCsrfToken(session.token);
+    res.setHeader("X-CSRF-Token", rotatedCsrfToken);
 
     res.status(201).json({
       user: newUser,
       token: session.token,
+      csrfToken: rotatedCsrfToken,
       message: "Registration successful.",
     });
   } catch (err: any) {
@@ -208,6 +215,15 @@ router.post("/auth/login", (req: Request, res: Response) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  // Enforce demo account restriction in production
+  if (normalizedEmail === "alex.student@learnix.ai" && !isDemoAccountEnabled()) {
+    return res.status(403).json({
+      error: "DEMO_DISABLED",
+      message: "Demo student account authentication is disabled in production.",
+    });
+  }
+
   const rateLimitKey = `${req.ip || "ip"}:${normalizedEmail}`;
 
   if (!checkLoginRateLimit(rateLimitKey)) {
@@ -223,12 +239,20 @@ router.post("/auth/login", (req: Request, res: Response) => {
   }
 
   resetLoginRateLimit(rateLimitKey);
+
+  // Destroy anonymous pre-auth context and create new session (prevent session fixation)
+  res.clearCookie(PREAUTH_COOKIE_NAME, { path: "/" });
   const session = db.createSession(user.id, req.headers["user-agent"], req.ip);
   res.cookie(COOKIE_NAME, session.token, COOKIE_OPTIONS);
+
+  // Rotate CSRF token bound to authenticated session
+  const rotatedCsrfToken = generateCsrfToken(session.token);
+  res.setHeader("X-CSRF-Token", rotatedCsrfToken);
 
   res.json({
     user,
     token: session.token,
+    csrfToken: rotatedCsrfToken,
     message: "Login successful.",
   });
 });
@@ -245,7 +269,14 @@ router.post("/auth/logout", (req: Request, res: Response) => {
   }
 
   res.clearCookie(COOKIE_NAME, { path: "/" });
-  res.json({ success: true, message: "Logged out successfully." });
+
+  // Issue fresh pre-auth context & rotated CSRF token for subsequent requests
+  const newPreauthId = crypto.randomBytes(32).toString("hex");
+  res.cookie(PREAUTH_COOKIE_NAME, newPreauthId, getCsrfCookieOptions());
+  const rotatedCsrfToken = generateCsrfToken(newPreauthId);
+  res.setHeader("X-CSRF-Token", rotatedCsrfToken);
+
+  res.json({ success: true, csrfToken: rotatedCsrfToken, message: "Logged out successfully." });
 });
 
 router.post("/auth/forgot-password", (req: Request, res: Response) => {
@@ -809,11 +840,11 @@ router.post("/lectures/reset-sample", (req: Request, res: Response) => {
   const user = requireAuth(req, res);
   if (!user) return;
 
-  const isDemoEnabled =
-    process.env.ENABLE_DEMO_ACCOUNT === "true" || process.env.NODE_ENV !== "production";
-
-  if (!isDemoEnabled || (user.id !== "user-student-1" && user.email !== "alex.student@learnix.ai")) {
-    return res.status(403).json({ error: "Reset to sample data is restricted to the demo student account." });
+  if (!isDemoAccountEnabled() || (user.id !== "user-student-1" && user.email !== "alex.student@learnix.ai")) {
+    return res.status(403).json({
+      error: "DEMO_DISABLED",
+      message: "Reset to sample data is restricted to the demo student account and is disabled in production.",
+    });
   }
 
   db.resetToSample(user.id);

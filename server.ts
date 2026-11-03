@@ -10,6 +10,7 @@ import apiRoutes from "./server/routes/api";
 import { db } from "./server/db";
 import { storageProvider } from "./server/services/storageProvider";
 import { liveTranscriptionService } from "./server/services/liveTranscriptionService";
+import { isDemoAccountEnabled } from "./server/middleware/csrf";
 
 /**
  * Robust Client Dist Path Resolver
@@ -152,7 +153,7 @@ async function startServer() {
       port: PORT,
       database: dbHealth,
       geminiKeyConfigured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
-      demoEnabled: process.env.ENABLE_DEMO_ACCOUNT === "true" || process.env.NODE_ENV !== "production",
+      demoEnabled: isDemoAccountEnabled(),
     });
   });
 

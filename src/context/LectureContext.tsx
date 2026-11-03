@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { Lecture, TranscriptSegment, RagResponse, QuizAttempt, WeakTopic } from "../types";
 import { useAuth } from "./AuthContext";
 import { AudioPcmProcessor } from "../utils/audioPcmProcessor";
+import { apiFetch } from "../services/apiClient";
 
 export type ViewType =
   | "landing"
@@ -211,7 +212,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setIsLoading(true);
     try {
-      const res = await fetch("/api/lectures", {
+      const res = await apiFetch("/api/lectures", {
         headers: getAuthHeaders(),
         credentials: "include",
       });
@@ -257,7 +258,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
       localStorage.setItem(storageKey, lectureId);
       let target = lectures.find((l) => l.id === lectureId);
       if (!target) {
-        const res = await fetch(`/api/lectures/${lectureId}`, {
+        const res = await apiFetch(`/api/lectures/${lectureId}`, {
           headers: getAuthHeaders(),
           credentials: "include",
         });
@@ -297,7 +298,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
       language?: string;
     }
   ): Promise<Lecture> => {
-    const res = await fetch("/api/lectures", {
+    const res = await apiFetch("/api/lectures", {
       method: "POST",
       headers: getAuthHeaders(),
       credentials: "include",
@@ -362,7 +363,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       // 3. Create or get active lecture on backend
       const lecture = await createNewLecture(title, subject, instructor, "live", metadata);
-      await fetch(`/api/lectures/${lecture.id}/status`, {
+      await apiFetch(`/api/lectures/${lecture.id}/status`, {
         method: "POST",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -475,7 +476,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const lectureId = currentLectureIdRef.current;
             if (base64 && lectureId) {
               try {
-                const res = await fetch(`/api/lectures/${lectureId}/transcribe-chunk`, {
+                const res = await apiFetch(`/api/lectures/${lectureId}/transcribe-chunk`, {
                   method: "POST",
                   headers: getAuthHeaders(),
                   credentials: "include",
@@ -629,7 +630,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (textLower.includes("complexity") || textLower.includes("o(1)")) detectedTopic = "Time Complexity Analysis";
 
     try {
-      const res = await fetch(`/api/lectures/${lectureId}/append-transcript`, {
+      const res = await apiFetch(`/api/lectures/${lectureId}/append-transcript`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -710,7 +711,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
               const lectureId = currentLectureIdRef.current;
               if (base64 && lectureId) {
                 try {
-                  await fetch(`/api/lectures/${lectureId}/transcribe-chunk`, {
+                  await apiFetch(`/api/lectures/${lectureId}/transcribe-chunk`, {
                     method: "POST",
                     headers: getAuthHeaders(),
                     credentials: "include",
@@ -813,7 +814,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (activeLecture) {
       // Update status on server
-      await fetch(`/api/lectures/${activeLecture.id}/status`, {
+      await apiFetch(`/api/lectures/${activeLecture.id}/status`, {
         method: "POST",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -828,7 +829,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const processLearningPack = async (lectureId: string) => {
     setActiveView("processing");
     try {
-      const res = await fetch(`/api/lectures/${lectureId}/process-learning-pack`, {
+      const res = await apiFetch(`/api/lectures/${lectureId}/process-learning-pack`, {
         method: "POST",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -841,7 +842,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Poll until ready
       const interval = setInterval(async () => {
         try {
-          const checkRes = await fetch(`/api/lectures/${lectureId}`, {
+          const checkRes = await apiFetch(`/api/lectures/${lectureId}`, {
             headers: getAuthHeaders(),
             credentials: "include",
           });
@@ -870,7 +871,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!activeLecture) {
       throw new Error("No active lecture selected");
     }
-    const res = await fetch(`/api/lectures/${activeLecture.id}/ask`, {
+    const res = await apiFetch(`/api/lectures/${activeLecture.id}/ask`, {
       method: "POST",
       headers: getAuthHeaders(),
       credentials: "include",
@@ -885,7 +886,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!activeLecture) {
       throw new Error("No active lecture");
     }
-    const res = await fetch(`/api/lectures/${activeLecture.id}/quiz/attempt`, {
+    const res = await apiFetch(`/api/lectures/${activeLecture.id}/quiz/attempt`, {
       method: "POST",
       headers: getAuthHeaders(),
       credentials: "include",
@@ -909,7 +910,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const resetToSampleData = async () => {
     setIsLoading(true);
     try {
-      await fetch("/api/lectures/reset-sample", {
+      await apiFetch("/api/lectures/reset-sample", {
         method: "POST",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -925,7 +926,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const deleteLecture = async (id: string) => {
     try {
-      await fetch(`/api/lectures/${id}`, {
+      await apiFetch(`/api/lectures/${id}`, {
         method: "DELETE",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -946,7 +947,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updateLectureNotes = async (notes: any[]) => {
     if (!activeLecture) return;
     try {
-      const res = await fetch(`/api/lectures/${activeLecture.id}/notes`, {
+      const res = await apiFetch(`/api/lectures/${activeLecture.id}/notes`, {
         method: "PUT",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -965,7 +966,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const id = lectureId || activeLecture?.id;
     if (!id) return;
     try {
-      const res = await fetch(`/api/lectures/${id}/transcription-jobs/retry`, {
+      const res = await apiFetch(`/api/lectures/${id}/transcription-jobs/retry`, {
         method: "POST",
         headers: getAuthHeaders(),
         credentials: "include",
@@ -977,7 +978,7 @@ export const LectureProvider: React.FC<{ children: React.ReactNode }> = ({ child
           quotaMessage: null,
         }));
         setTimeout(async () => {
-          const lRes = await fetch(`/api/lectures/${id}`, {
+          const lRes = await apiFetch(`/api/lectures/${id}`, {
             headers: getAuthHeaders(),
             credentials: "include",
           });
