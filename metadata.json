@@ -1,0 +1,10 @@
+{
+  "name": "LearniX",
+  "description": "LearniX — AI-powered Lecture Intelligence & Personalized Learning Platform transforming live and recorded lectures into structured transcripts, smart notes, automatic chapters, grounded RAG Q&A, quizzes, weak-topic detection, and personalized revision.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

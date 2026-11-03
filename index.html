@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LearniX | AI Study Companion</title>
+    <meta name="description" content="LearniX — AI-powered Lecture Intelligence &amp; Personalized Learning Platform transforming live and recorded lectures into structured transcripts, smart notes, automatic chapters, grounded Q&amp;A, quizzes, weak-topic detection, and personalized revision." />
+    <meta property="og:title" content="LearniX | AI Study Companion" />
+    <meta property="og:description" content="LearniX — AI-powered Lecture Intelligence &amp; Personalized Learning Platform transforming live and recorded lectures into structured transcripts, smart notes, automatic chapters, grounded Q&amp;A, quizzes, weak-topic detection, and personalized revision." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        try {
+          var stored = localStorage.getItem('learnix-theme') || localStorage.getItem('edupulse-theme') || localStorage.getItem('theme');
+          var isDark = stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
+            if (document.body) {
+              document.body.classList.add('dark');
+              document.body.setAttribute('data-theme', 'dark');
+            }
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.setAttribute('data-theme', 'light');
+            if (document.body) {
+              document.body.classList.remove('dark');
+              document.body.setAttribute('data-theme', 'light');
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#F8FAF8] text-[#17201D] dark:bg-[#121816] dark:text-[#F1FAF7] font-sans antialiased selection:bg-[#168A72] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

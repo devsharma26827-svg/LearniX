@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Production build outputs
+dist/
+build/
+
+# Local data & SQLite databases
+.data/
+.data*/
+.backup*/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Environment variables & secrets
+.env*
+!.env.example
+
+# Logs and system artifacts
+*.log
+.DS_Store
+Thumbs.db
